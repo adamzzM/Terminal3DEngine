@@ -2,7 +2,7 @@
 use std::{io::{self, Write}, time::Duration};
 use std::thread::sleep;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::BufRead;
 use std::path::Path;
 use std::time::Instant;
 
@@ -278,8 +278,10 @@ fn main() {
     let mut buffer: Vec<char> = vec![' '; term_size.0 as usize * term_size.1 as usize];
 
 
-    let mut cube = Mesh::from_obj("obj/car.obj").unwrap();
-    cube.shift(Pos::new(0.0,0.0,6.0));
+    let mut cube = Mesh::from_obj("obj/horse.obj").unwrap();
+    cube.shift(Pos::new(0.0,10.0,10.0));
+    //cube.rotate_z_about_axis(90.0, None);
+    //cube.rotate_x_about_axis(70.0, None);
     let mut angle = 0.0;
 
     loop {
@@ -298,7 +300,7 @@ fn main() {
 
 
         let mut mesh = cube.clone();
-        //mesh.rotate_x_about_axis(angle, None);
+        mesh.rotate_x_about_axis(angle, None);
         mesh.rotate_y_about_axis(angle, None);
         draw_mesh(&mesh, term_size, &mut z_buffer,&mut buffer);
 
