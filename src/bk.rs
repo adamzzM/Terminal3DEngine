@@ -7,8 +7,6 @@ use std::path::Path;
 use std::time::Instant;
 
 
-
-
 #[derive(Clone)]
 struct ZBuffer {
     depths: Vec<f32>,
@@ -51,20 +49,14 @@ impl Pos {
         Self { x, y, z }
     }
 
-    fn resolve(&self,camera: &Pos) -> Option<(f32, f32)> {
-
-        let rel_x = self.x - camera.x;
-        let rel_y= self.y - camera.y;
-        let rel_z = self.z - camera.z;
-
-
-        const MIN: f32 = 0.1;
-        if rel_z < MIN {
+    fn resolve(&self) -> Option<(f32, f32)> {
+        const MIN: f32 = 0.5;
+        if self.z < MIN {
             return None;
         }
         const K1: f32 = 0.5;
-        let new_x = ((rel_x * K1) / rel_z) + 0.5;
-        let new_y = ((rel_y * K1) / rel_z) + 0.5;
+        let new_x = ((self.x * K1) / self.z) + 0.5;
+        let new_y = ((self.y * K1) / self.z) + 0.5;
         Some((new_x, new_y))
     }
 
@@ -286,15 +278,12 @@ fn main() {
     let mut buffer: Vec<char> = vec![' '; term_size.0 as usize * term_size.1 as usize];
 
 
-    let mut cube = Mesh::from_obj("obj/chest.obj").unwrap();
-    cube.shift(Pos::new(0.0,0.0,4.0));
+    let mut cube = Mesh::from_obj("assets/skull.obj").unwrap();
+    cube.shift(Pos::new(0.0,0.0,100.0));
     //cube.rotate_z_about_axis(90.0, None);
     //cube.rotate_x_about_axis(70.0, None);
-
     let mut angle = 0.0;
     let mut offset = Pos::new(0.0,0.0,0.0);
-
-    let mut camera = Pos::new(0.0,0.0,0.0);
 
     loop {
 
@@ -303,22 +292,22 @@ fn main() {
             buffer = vec![' '; term_size.0 as usize * term_size.1 as usize];
         }
 
-        let frame_start = Instant::now();
+        let frame_start = Instant2:now();
         let mut z_buffer = ZBuffer::new(&term_size);
 
 
         render_buffer(&buffer, term_size);
         buffer.fill(' '); 
 
+
         let mut mesh = cube.clone();
         mesh.rotate_x_about_axis(angle, None);
         mesh.rotate_y_about_axis(angle, None);
         mesh.shift(offset);
-        draw_mesh(&mesh, term_size, &mut z_buffer,&mut buffer,&camera);
+        draw_mesh(&mesh, term_size, &mut z_buffer,&mut buffer);
 
         angle += 0.06;
-        //camera.x += 0.2;
-        //offset.z -= 0.06;
+        offset.z -= 0.06;
 
         let frame_elapsed = frame_start.elapsed();
         if frame_elapsed < FRAME_TIME {
@@ -328,7 +317,7 @@ fn main() {
 }
 
 
-fn draw_mesh(mesh: &Mesh, screen_size: (u16, u16), z_buffer: &mut ZBuffer,buffer: &mut Vec<char>,camera: &Pos) {
+fn draw_mesh(mesh: &Mesh, screen_size: (u16, u16), z_buffer: &mut ZBuffer,buffer: &mut Vec<char>) {
     let light_dir = Pos::new(0.5, -0.5, -1.0);
     let len = (light_dir.x * light_dir.x + light_dir.y * light_dir.y + light_dir.z * light_dir.z).sqrt();
     let light_dir = Pos::new(light_dir.x / len, light_dir.y / len, light_dir.z / len);
@@ -346,7 +335,7 @@ fn draw_mesh(mesh: &Mesh, screen_size: (u16, u16), z_buffer: &mut ZBuffer,buffer
         let intensity = calculate_lighting(normal, light_dir);
         let ch = intensity_to_char(intensity);
         
-        fill_triangle(tri, ch, screen_size, z_buffer,buffer,camera);
+        fill_triangle(tri, ch, screen_size, z_buffer,buffer);
     }
 }
 
@@ -355,10 +344,10 @@ fn calculate_lighting(normal: Pos, light_dir: Pos) -> f32 {
     dot.max(0.0)
 }
 
-fn fill_triangle(tri: &Triangle, ch: char, screen_size: (u16, u16), z_buffer: &mut ZBuffer,buffer: &mut Vec<char>,camera: &Pos) {
-    let r0 = tri.v0.resolve(camera);
-    let r1 = tri.v1.resolve(camera);
-    let r2 = tri.v2.resolve(camera);
+fn fill_triangle(tri: &Triangle, ch: char, screen_size: (u16, u16), z_buffer: &mut ZBuffer,buffer: &mut Vec<char>) {
+    let r0 = tri.v0.resolve();
+    let r1 = tri.v1.resolve();
+    let r2 = tri.v2.resolve();
 
     if r0.is_none() || r1.is_none() || r2.is_none() {
         return;
