@@ -1,18 +1,22 @@
+use std::{io::{self, Write}, time::Duration}; 
+use std::thread::sleep; 
+use std::fs::File; 
+use std::io::BufRead; 
+use std::path::Path; 
+use std::time::Instant; 
+use std::collections::HashMap;
 
-use std::{io::{self, Write}, time::Duration};
-use std::thread::sleep;
-use std::fs::File;
-use std::io::BufRead;
-use std::path::Path;
-use std::time::Instant;
+mod input; 
+mod terminal;
 
 
 
 
-#[derive(Clone)]
+
+
 struct ZBuffer {
-    depths: Vec<f32>,
-    width: usize,
+    depths : Vec<f32>,
+    width: usize
 }
 
 impl ZBuffer {
@@ -40,18 +44,18 @@ impl ZBuffer {
 }
 
 #[derive(Copy, Clone)]
-struct Pos {
+struct Vec3 {
     x: f32,
     y: f32,
     z: f32,
 }
 
-impl Pos {
+impl Vec3 {
     fn new(x: f32, y: f32, z: f32) -> Self {
         Self { x, y, z }
     }
 
-    fn resolve(&self,camera: &Pos) -> Option<(f32, f32)> {
+    fn resolve(&self,camera: &Vec3) -> Option<(f32, f32)> {
 
         let rel_x = self.x - camera.x;
         let rel_y= self.y - camera.y;
@@ -62,62 +66,69 @@ impl Pos {
         if rel_z < MIN {
             return None;
         }
-        const K1: f32 = 0.5;
+        const K1: f32 = 1.2;
         let new_x = ((rel_x * K1) / rel_z) + 0.5;
         let new_y = ((rel_y * K1) / rel_z) + 0.5;
         Some((new_x, new_y))
     }
 
-    fn rotate_y(&self, angle: f32) -> Pos {
+    fn rotate_y(&self, angle: f32) -> Vec3 {
         let cos = angle.cos();
         let sin = angle.sin();
-        Pos {
+        Vec3 {
             x: self.x * cos + self.z * sin,
             y: self.y,
             z: -self.x * sin + self.z * cos,
         }
     }
 
-    fn rotate_z(&self, angle: f32) -> Pos {
+    fn rotate_z(&self, angle: f32) -> Vec3 {
         let cos = angle.cos();
         let sin = angle.sin();
-        Pos {
+        Vec3 {
             x: self.x * cos - self.y * sin,
             y: self.x * sin + self.y * cos,
             z: self.z,
         }
     }
 
-    fn rotate_x(&self, angle: f32) -> Pos {
+    fn rotate_x(&self, angle: f32) -> Vec3 {
         let cos = angle.cos();
         let sin = angle.sin();
-        Pos {
+        Vec3 {
             x: self.x,
             y: self.y * cos - self.z * sin,
             z: self.y * sin + self.z * cos,
         }
     }
+    fn dot(&self, other: Vec3) -> f32 {
+        self.x * other.x + self.y * other.y + self.z * other.z
+    }
 }
 
 #[derive(Clone)]
 struct Triangle {
-    v0: Pos,
-    v1: Pos,
-    v2: Pos,
+    v0: Vec3,
+    v1: Vec3,
+    v2: Vec3,
+    // v0: usize,
+    // v1: usize,
+    // v2: usize,
 }
 
 impl Triangle {
-    fn new(v0: Pos, v1: Pos, v2: Pos) -> Self {
+
+    fn new(v0: Vec3, v1:  Vec3, v2: Vec3) -> Self {
         Self { v0, v1, v2 }
     }
 
-    fn normal(&self) -> Pos {
-        let edge1 = Pos::new(
+    fn normal(&self) -> Vec3 {
+        let edge1 = Vec3::new(
             self.v1.x - self.v0.x,
             self.v1.y - self.v0.y,
             self.v1.z - self.v0.z,
         );
-        let edge2 = Pos::new(
+        let edge2 = Vec3::new(
             self.v2.x - self.v0.x,
             self.v2.y - self.v0.y,
             self.v2.z - self.v0.z,
@@ -126,7 +137,7 @@ impl Triangle {
         let ny = edge1.z * edge2.x - edge1.x * edge2.z;
         let nz = edge1.x * edge2.y - edge1.y * edge2.x;
         let len = (nx * nx + ny * ny + nz * nz).sqrt();
-        Pos::new(nx / len, ny / len, nz / len)
+        Vec3::new(nx / len, ny / len, nz / len)
     }
 }
 
@@ -146,7 +157,7 @@ impl Mesh {
         let file = File::open(Path::new(path))?;
         let reader = io::BufReader::new(file);
 
-        let mut vertices: Vec<Pos> = Vec::new();
+        let mut vertices: Vec<Vec3> = Vec::new();
         let mut triangles: Vec<Triangle> = Vec::new();
 
         for line in reader.lines() {
@@ -161,7 +172,7 @@ impl Mesh {
                     let x: f32 = parts.next().unwrap().parse().unwrap();
                     let y: f32 = parts.next().unwrap().parse().unwrap();
                     let z: f32 = parts.next().unwrap().parse().unwrap();
-                    vertices.push(Pos::new(x, y, z));
+                    vertices.push(Vec3::new(x, y, z));
                 }
                 Some("f") => {
                     let indices: Vec<usize> = parts
@@ -199,7 +210,7 @@ impl Mesh {
         Ok(Self { triangles })
     }
 
-    fn shift(&mut self, offset: Pos) {
+    fn shift(&mut self, offset: Vec3) {
         for tri in &mut self.triangles {
             tri.v0.x += offset.x;
             tri.v0.y += offset.y;
@@ -213,11 +224,11 @@ impl Mesh {
         }
     }
 
-    fn rotate_x_about_axis(&mut self, angle: f32, axis: Option<Pos>) {
+    fn rotate_x_about_axis(&mut self, angle: f32, axis: Option<Vec3>) {
         let center = axis.unwrap_or_else(|| self.get_center());
         for tri in &mut self.triangles {
             for v in [&mut tri.v0, &mut tri.v1, &mut tri.v2] {
-                let shifted = Pos::new(v.x - center.x, v.y - center.y, v.z - center.z).rotate_x(angle);
+                let shifted = Vec3::new(v.x - center.x, v.y - center.y, v.z - center.z).rotate_x(angle);
                 v.x = shifted.x + center.x;
                 v.y = shifted.y + center.y;
                 v.z = shifted.z + center.z;
@@ -225,11 +236,11 @@ impl Mesh {
         }
     }
 
-    fn rotate_y_about_axis(&mut self, angle: f32, axis: Option<Pos>) {
+    fn rotate_y_about_axis(&mut self, angle: f32, axis: Option<Vec3>) {
         let center = axis.unwrap_or_else(|| self.get_center());
         for tri in &mut self.triangles {
             for v in [&mut tri.v0, &mut tri.v1, &mut tri.v2] {
-                let shifted = Pos::new(v.x - center.x, v.y - center.y, v.z - center.z).rotate_y(angle);
+                let shifted = Vec3::new(v.x - center.x, v.y - center.y, v.z - center.z).rotate_y(angle);
                 v.x = shifted.x + center.x;
                 v.y = shifted.y + center.y;
                 v.z = shifted.z + center.z;
@@ -237,11 +248,11 @@ impl Mesh {
         }
     }
 
-    fn rotate_z_about_axis(&mut self, angle: f32, axis: Option<Pos>) {
+    fn rotate_z_about_axis(&mut self, angle: f32, axis: Option<Vec3>) {
         let center = axis.unwrap_or_else(|| self.get_center());
         for tri in &mut self.triangles {
             for v in [&mut tri.v0, &mut tri.v1, &mut tri.v2] {
-                let shifted = Pos::new(v.x - center.x, v.y - center.y, v.z - center.z).rotate_z(angle);
+                let shifted = Vec3::new(v.x - center.x, v.y - center.y, v.z - center.z).rotate_z(angle);
                 v.x = shifted.x + center.x;
                 v.y = shifted.y + center.y;
                 v.z = shifted.z + center.z;
@@ -249,7 +260,7 @@ impl Mesh {
         }
     }
 
-    fn get_center(&self) -> Pos {
+    fn get_center(&self) -> Vec3 {
         let mut min = self.triangles[0].v0;
         let mut max = self.triangles[0].v0;
         for tri in &self.triangles {
@@ -262,7 +273,7 @@ impl Mesh {
                 max.z = max.z.max(v.z);
             }
         }
-        Pos {
+        Vec3 {
             x: (min.x + max.x) / 2.0,
             y: (min.y + max.y) / 2.0,
             z: (min.z + max.z) / 2.0,
@@ -270,10 +281,33 @@ impl Mesh {
     }
 }
 
+struct Entity{
+    mesh: Mesh,
+    transform: Mesh,
+}
+
+impl Entity{
+    fn new() -> Self{
+        Self{
+            mesh: Mesh::new(),
+            transform: Mesh::new(),
+        }
+    }
+    fn load_obj(&mut self,path: &str) -> io::Result<()>{
+        self.mesh = Mesh::from_obj(path)?;
+        self.transform = self.mesh.clone();
+        Ok(())
+    }
+}
+
 
 fn intensity_to_char(intensity: f32) -> char {
-    let chars = ['.', ':', '-', '=', '+', '*', '#', '%', '@'];
-    let idx = (intensity * (chars.len() - 1) as f32) as usize;
+    let chars = [
+    ' ', '`', '.', '\'', ',', ':', ';', '"', '^', 
+    '-', '~', '=', '+', '*', 'o', 'O', '#', '%', '@', '█'
+    ];
+    let gamma = intensity.powf(0.6);
+    let idx = (gamma * (chars.len() - 1) as f32) as usize;
     chars[idx.min(chars.len() - 1)]
 }
 
@@ -281,25 +315,51 @@ fn main() {
     const TARGET_FPS: u64 = 60;
     const FRAME_TIME: Duration = Duration::from_millis(1000 / TARGET_FPS);
 
-    let mut term_size = get_terminal_size();
+    let mut term_size = terminal::get_terminal_size();
 
     let mut buffer: Vec<char> = vec![' '; term_size.0 as usize * term_size.1 as usize];
 
+    let mut new_cube = Entity::new();
+    let _ = new_cube.load_obj("obj/skull.obj").expect("failed to load obj");
 
-    let mut cube = Mesh::from_obj("obj/chest.obj").unwrap();
-    cube.shift(Pos::new(0.0,0.0,4.0));
+
+
+
+    let mut cube = Mesh::from_obj("obj/skull.obj").unwrap();
+    cube.shift(Vec3::new(0.0,0.0,20.0));
+
+    let mut second_cube = cube.clone();
+    second_cube.shift(Vec3::new(20.0,0.0,0.0));
+
+    // make floor 
+    let mut floor = Mesh::new();
+
+
+    let z_offset = 30.0;
+
+    floor.triangles.push(Triangle::new(
+        Vec3::new(-50.0, -5.0,  50.0 + z_offset),
+        Vec3::new( 50.0, -5.0,  50.0 + z_offset),
+        Vec3::new( 50.0, -5.0, -50.0 + z_offset),
+    ));
+
+    floor.triangles.push(Triangle::new(
+        Vec3::new(-50.0, -5.0,  50.0 + z_offset),
+        Vec3::new( 50.0, -5.0, -50.0 + z_offset),
+        Vec3::new(-50.0, -5.0, -50.0 + z_offset),
+    ));
     //cube.rotate_z_about_axis(90.0, None);
     //cube.rotate_x_about_axis(70.0, None);
 
     let mut angle = 0.0;
-    let mut offset = Pos::new(0.0,0.0,0.0);
+    let mut offset = Vec3::new(0.0,0.0,0.0);
 
-    let mut camera = Pos::new(0.0,0.0,0.0);
+    let mut camera = Vec3::new(0.0,0.0,0.0);
 
     loop {
 
-        if term_size != get_terminal_size() {
-            term_size = get_terminal_size();
+        if term_size != terminal::get_terminal_size() {
+            term_size = terminal::get_terminal_size();
             buffer = vec![' '; term_size.0 as usize * term_size.1 as usize];
         }
 
@@ -311,14 +371,31 @@ fn main() {
         buffer.fill(' '); 
 
         let mut mesh = cube.clone();
+        let mut secon_mesh = second_cube.clone();
         mesh.rotate_x_about_axis(angle, None);
         mesh.rotate_y_about_axis(angle, None);
+
+        secon_mesh.rotate_x_about_axis(-angle, None);
+        secon_mesh.rotate_y_about_axis(-angle, None);
+
         mesh.shift(offset);
+   //     draw_mesh(&secon_mesh, term_size, &mut z_buffer, &mut buffer, &camera);
         draw_mesh(&mesh, term_size, &mut z_buffer,&mut buffer,&camera);
 
         angle += 0.06;
         //camera.x += 0.2;
         //offset.z -= 0.06;
+
+        if let Some(key) = input::poll_key() {
+            match key {
+                b'w' => camera.z += 1.0,
+                b's' => camera.z -= 1.0,
+                b'a' => camera.x -= 1.0,
+                b'd' => camera.x += 1.0,
+                b'q' => break,
+                _ => {}
+            }
+        }
 
         let frame_elapsed = frame_start.elapsed();
         if frame_elapsed < FRAME_TIME {
@@ -328,21 +405,22 @@ fn main() {
 }
 
 
-fn draw_mesh(mesh: &Mesh, screen_size: (u16, u16), z_buffer: &mut ZBuffer,buffer: &mut Vec<char>,camera: &Pos) {
-    let light_dir = Pos::new(0.5, -0.5, -1.0);
+fn draw_mesh(mesh: &Mesh, screen_size: (u16, u16), z_buffer: &mut ZBuffer,buffer: &mut Vec<char>,camera: &Vec3) {
+    let light_dir = Vec3::new(0.5, -0.5, -1.0);
     let len = (light_dir.x * light_dir.x + light_dir.y * light_dir.y + light_dir.z * light_dir.z).sqrt();
-    let light_dir = Pos::new(light_dir.x / len, light_dir.y / len, light_dir.z / len);
+    let light_dir = Vec3::new(light_dir.x / len, light_dir.y / len, light_dir.z / len);
 
     for tri in &mesh.triangles {
         let normal = tri.normal();
         
-        // Backface culling - only draw if facing camera
-        let view_dir = Pos::new(0.0, 0.0, -1.0);
-        let dot = normal.x * view_dir.x + normal.y * view_dir.y + normal.z * view_dir.z;
+        // only draw if facing camera
+        let view_dir = Vec3::new(0.0, 0.0, -1.0);
+        let dot = normal.dot(view_dir);
         if dot <= 0.0 {
             continue;
         }
-
+        // only draw if visible to camera TODO
+        
         let intensity = calculate_lighting(normal, light_dir);
         let ch = intensity_to_char(intensity);
         
@@ -350,12 +428,15 @@ fn draw_mesh(mesh: &Mesh, screen_size: (u16, u16), z_buffer: &mut ZBuffer,buffer
     }
 }
 
-fn calculate_lighting(normal: Pos, light_dir: Pos) -> f32 {
-    let dot = normal.x * light_dir.x + normal.y * light_dir.y + normal.z * light_dir.z;
-    dot.max(0.0)
+
+fn calculate_lighting(normal: Vec3, light_dir: Vec3) -> f32 {
+    let light_fall_off = 0.3;
+    let dot = normal.dot(light_dir);
+    let distance_fade = (1.0 / (1.0 + normal.z * light_fall_off)).clamp(0.1, 1.0);
+    (dot * distance_fade).max(0.0)
 }
 
-fn fill_triangle(tri: &Triangle, ch: char, screen_size: (u16, u16), z_buffer: &mut ZBuffer,buffer: &mut Vec<char>,camera: &Pos) {
+fn fill_triangle(tri: &Triangle, ch: char, screen_size: (u16, u16), z_buffer: &mut ZBuffer,buffer: &mut Vec<char>,camera: &Vec3) {
     let r0 = tri.v0.resolve(camera);
     let r1 = tri.v1.resolve(camera);
     let r2 = tri.v2.resolve(camera);
@@ -424,31 +505,4 @@ fn render_buffer(buffer: &Vec<char>, screen_size: (u16, u16)) {
         }
     }
     stdout.flush().unwrap();
-}
-
-
-#[cfg(unix)]
-fn get_terminal_size() -> (u16, u16) {
-    use libc::{ioctl, winsize, STDOUT_FILENO, TIOCGWINSZ};
-    unsafe {
-        let mut ws: winsize = std::mem::zeroed();
-        ioctl(STDOUT_FILENO, TIOCGWINSZ, &mut ws);
-        (ws.ws_col, ws.ws_row)
-    }
-}
-
-#[cfg(windows)]
-fn get_terminal_size() -> (u16, u16) {
-    use winapi::um::wincon::{GetConsoleScreenBufferInfo, CONSOLE_SCREEN_BUFFER_INFO};
-    use winapi::um::processenv::GetStdHandle;
-    use winapi::um::winbase::STD_OUTPUT_HANDLE;
-    use std::mem::zeroed;
-    unsafe {
-        let mut csbi: CONSOLE_SCREEN_BUFFER_INFO = zeroed();
-        let handle = GetStdHandle(STD_OUTPUT_HANDLE);
-        GetConsoleScreenBufferInfo(handle, &mut csbi);
-        let width = (csbi.srWindow.Right - csbi.srWindow.Left + 1) as u16;
-        let height = (csbi.srWindow.Bottom - csbi.srWindow.Top + 1) as u16;
-        (width, height)
-    }
 }

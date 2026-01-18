@@ -7,6 +7,5 @@ Basic ahh 3d engine
 TODO
  optimize triangle handling -> Instead of storing trianlge objects store list of positions and have triangles be lists of u32's describing indices of positions (avoid duplication)
 
- don't render things camera can't see
 
  make sure the obj file parser is better 
