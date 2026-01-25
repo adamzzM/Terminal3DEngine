@@ -4,14 +4,86 @@ use std::fs::File;
 use std::io::BufRead; 
 use std::path::Path; 
 use std::time::Instant; 
-use std::collections::HashMap;
 
+mod algebra;
 mod input; 
 mod terminal;
 
 
+use algebra::{Vec3,Vec4,Mat4,Triangle};
 
 
+const EPS: f32 = 1e-5;
+
+struct Entity {
+    transform: Transform,
+    mesh: Mesh,
+}
+
+struct Transform{
+    pos: Vec3,
+    rotation: Vec4,
+    scale: Vec3,
+    world: Mat4,
+    dirty: bool
+
+}
+impl Transform{
+    pub fn new() -> Self{
+        let pos = Vec3::new(0.0,0.0,0.0);
+        let rotation = Vec4::new(0.0,0.0,0.0,1.0);
+        let scale = Vec3::new(1.0,1.0,1.0);
+        let mut world = Mat4::new();
+
+        world.scale(&scale);
+        world.rotation(&rotation);
+        world.translation(&pos);
+
+
+        Transform {
+             pos: pos , 
+             rotation: rotation, 
+             scale: scale, 
+             world: world,
+             dirty: false 
+            }
+    }
+
+    pub fn translate(&mut self,t: &Vec3){
+        self.dirty = true;
+
+        self.pos.x += t.x;
+        self.pos.y += t.y;
+        self.pos.z += t.z;        
+    }
+
+    pub fn rotate(&mut self,r: &Vec4){
+        self.dirty = true;
+        self.rotation = self.rotation * *r;
+        self.rotation.normalize();
+    }
+
+    pub fn scale_by(&mut self, factor: Vec3) {
+        self.scale.x *= factor.x;
+        self.scale.y *= factor.y;
+        self.scale.z *= factor.z;
+        self.dirty = true;
+    }
+    
+    pub fn set_scale(&mut self,s: &Vec3){
+        self.scale = *s;
+    }
+
+    pub fn recalucate_world(&mut self){
+        if !(self.dirty){return}
+        let mut new_world = Mat4::new();
+        new_world.scale(&self.scale);
+        new_world.rotation(&self.rotation);
+        new_world.translation(&self.pos);
+        self.world = new_world;
+        self.dirty = false;
+    }
+}
 
 
 struct ZBuffer {
@@ -40,125 +112,69 @@ impl ZBuffer {
             false
         }
     }
+    pub fn resize(&mut self, term_size: (u16, u16)) {
+        let new_width  = term_size.0 as usize;
+        let new_height = term_size.1 as usize;
+
+        self.width = new_width;
+        self.depths.clear();
+        self.depths.resize(new_width * new_height, f32::INFINITY);
+    }
 
 }
 
-#[derive(Copy, Clone)]
-struct Vec3 {
-    x: f32,
-    y: f32,
-    z: f32,
-}
 
-impl Vec3 {
-    fn new(x: f32, y: f32, z: f32) -> Self {
-        Self { x, y, z }
-    }
-
-    fn resolve(&self,camera: &Vec3) -> Option<(f32, f32)> {
-
-        let rel_x = self.x - camera.x;
-        let rel_y= self.y - camera.y;
-        let rel_z = self.z - camera.z;
-
-
-        const MIN: f32 = 0.1;
-        if rel_z < MIN {
-            return None;
-        }
-        const K1: f32 = 1.2;
-        let new_x = ((rel_x * K1) / rel_z) + 0.5;
-        let new_y = ((rel_y * K1) / rel_z) + 0.5;
-        Some((new_x, new_y))
-    }
-
-    fn rotate_y(&self, angle: f32) -> Vec3 {
-        let cos = angle.cos();
-        let sin = angle.sin();
-        Vec3 {
-            x: self.x * cos + self.z * sin,
-            y: self.y,
-            z: -self.x * sin + self.z * cos,
-        }
-    }
-
-    fn rotate_z(&self, angle: f32) -> Vec3 {
-        let cos = angle.cos();
-        let sin = angle.sin();
-        Vec3 {
-            x: self.x * cos - self.y * sin,
-            y: self.x * sin + self.y * cos,
-            z: self.z,
-        }
-    }
-
-    fn rotate_x(&self, angle: f32) -> Vec3 {
-        let cos = angle.cos();
-        let sin = angle.sin();
-        Vec3 {
-            x: self.x,
-            y: self.y * cos - self.z * sin,
-            z: self.y * sin + self.z * cos,
-        }
-    }
-    fn dot(&self, other: Vec3) -> f32 {
-        self.x * other.x + self.y * other.y + self.z * other.z
-    }
-}
-
-#[derive(Clone)]
-struct Triangle {
-    v0: Vec3,
-    v1: Vec3,
-    v2: Vec3,
-    // v0: usize,
-    // v1: usize,
-    // v2: usize,
-}
-
-impl Triangle {
-
-    fn new(v0: Vec3, v1:  Vec3, v2: Vec3) -> Self {
-        Self { v0, v1, v2 }
-    }
-
-    fn normal(&self) -> Vec3 {
-        let edge1 = Vec3::new(
-            self.v1.x - self.v0.x,
-            self.v1.y - self.v0.y,
-            self.v1.z - self.v0.z,
-        );
-        let edge2 = Vec3::new(
-            self.v2.x - self.v0.x,
-            self.v2.y - self.v0.y,
-            self.v2.z - self.v0.z,
-        );
-        let nx = edge1.y * edge2.z - edge1.z * edge2.y;
-        let ny = edge1.z * edge2.x - edge1.x * edge2.z;
-        let nz = edge1.x * edge2.y - edge1.y * edge2.x;
-        let len = (nx * nx + ny * ny + nz * nz).sqrt();
-        Vec3::new(nx / len, ny / len, nz / len)
-    }
-}
 
 #[derive(Clone)]
 struct Mesh {
+    points: Vec<Vec3>,
     triangles: Vec<Triangle>,
 }
 
 impl Mesh {
     fn new() -> Self {
         Self {
+            points: Vec::new(),
             triangles: Vec::new(),
         }
     }
 
-    fn from_obj(path: &str) -> io::Result<Self> {
+    // area for optimizatioonnnn
+    fn add_triangle(&mut self,p1: Vec3,p2: Vec3,p3: Vec3){
+        let mut values: [isize; 3] = [-1 ; 3];
+
+        for (i,j) in self.points.iter().enumerate(){
+            if j.approx_eq(&p1, EPS){
+                values[0] = i as isize; 
+            }
+            if j.approx_eq(&p2, EPS){
+                values[1] = i as isize; 
+            }
+            if j.approx_eq(&p3, EPS){
+                values[2] = i as isize; 
+            }
+        }
+        if values[0] == -1{
+           self.points.push(p1);
+           values[0] = (self.points.len() - 1 ) as isize; // for consistency
+        }
+        if values[1] == -1{
+            self.points.push(p2);   
+           values[1] = (self.points.len() - 1) as isize;
+        }
+        if values[2] == -1{
+           self.points.push(p3);
+           values[2] = (self.points.len() - 1) as isize;
+        }
+        self.triangles.push(algebra::Triangle::new(values[0] as usize,values[1] as usize,values[2] as usize));
+
+    }
+
+    fn from_obj(&mut self, path: &str) -> io::Result<()> {
         let file = File::open(Path::new(path))?;
         let reader = io::BufReader::new(file);
 
         let mut vertices: Vec<Vec3> = Vec::new();
-        let mut triangles: Vec<Triangle> = Vec::new();
 
         for line in reader.lines() {
             let line = line?;
@@ -186,83 +202,89 @@ impl Mesh {
                         })
                         .collect();
                     if indices.len() == 3 {
-                        triangles.push(Triangle::new(
-                            vertices[indices[0]],
-                            vertices[indices[1]],
-                            vertices[indices[2]],
-                        ));
+
+                        self.add_triangle(vertices[indices[0]],vertices[indices[1]],vertices[indices[2]]);
+                        // triangles.push(Triangle::new(
+                        //     vertices[indices[0]],
+                        //     vertices[indices[1]],
+                        //     vertices[indices[2]],
+                        // ));
                     } else if indices.len() == 4 {
-                        triangles.push(Triangle::new(
-                            vertices[indices[0]],
-                            vertices[indices[1]],
-                            vertices[indices[2]],
-                        ));
-                        triangles.push(Triangle::new(
-                            vertices[indices[0]],
-                            vertices[indices[2]],
-                            vertices[indices[3]],
-                        ));
+                        self.add_triangle(vertices[indices[0]],vertices[indices[1]],vertices[indices[2]]);
+
+                        self.add_triangle(vertices[indices[0]],vertices[indices[2]],vertices[indices[3]]);
+                        // triangles.push(Triangle::new(
+                        //     vertices[indices[0]],
+                        //     vertices[indices[1]],
+                        //     vertices[indices[2]],
+                        // ));
+                        // triangles.push(Triangle::new(
+                        //     vertices[indices[0]],
+                        //     vertices[indices[2]],
+                        //     vertices[indices[3]],
+                        // ));
                     }
                 }
                 _ => {}
             }
         }
-        Ok(Self { triangles })
+        Ok(())
     }
 
-    fn shift(&mut self, offset: Vec3) {
-        for tri in &mut self.triangles {
-            tri.v0.x += offset.x;
-            tri.v0.y += offset.y;
-            tri.v0.z += offset.z;
-            tri.v1.x += offset.x;
-            tri.v1.y += offset.y;
-            tri.v1.z += offset.z;
-            tri.v2.x += offset.x;
-            tri.v2.y += offset.y;
-            tri.v2.z += offset.z;
-        }
-    }
+    // fn shift(&mut self, offset: Vec3) {
+    //     for tri in &mut self.triangles {
+    //         tri.v0.x += offset.x;
+    //         tri.v0.y += offset.y;
+    //         tri.v0.z += offset.z;
+    //         tri.v1.x += offset.x;
+    //         tri.v1.y += offset.y;
+    //         tri.v1.z += offset.z;
+    //         tri.v2.x += offset.x;
+    //         tri.v2.y += offset.y;
+    //         tri.v2.z += offset.z;
+    //     }
+    // }
 
-    fn rotate_x_about_axis(&mut self, angle: f32, axis: Option<Vec3>) {
-        let center = axis.unwrap_or_else(|| self.get_center());
-        for tri in &mut self.triangles {
-            for v in [&mut tri.v0, &mut tri.v1, &mut tri.v2] {
-                let shifted = Vec3::new(v.x - center.x, v.y - center.y, v.z - center.z).rotate_x(angle);
-                v.x = shifted.x + center.x;
-                v.y = shifted.y + center.y;
-                v.z = shifted.z + center.z;
-            }
-        }
-    }
+    // fn rotate_x_about_axis(&mut self, angle: f32, axis: Option<Vec3>) {
+    //     let center = axis.unwrap_or_else(|| self.get_center());
+    //     for tri in &mut self.triangles {
+    //         for v in [&mut tri.v0, &mut tri.v1, &mut tri.v2] {
+    //             let shifted = Vec3::new(v.x - center.x, v.y - center.y, v.z - center.z).rotate_x(angle);
+    //             v.x = shifted.x + center.x;
+    //             v.y = shifted.y + center.y;
+    //             v.z = shifted.z + center.z;
+    //         }
+    //     }
+    // }
 
-    fn rotate_y_about_axis(&mut self, angle: f32, axis: Option<Vec3>) {
-        let center = axis.unwrap_or_else(|| self.get_center());
-        for tri in &mut self.triangles {
-            for v in [&mut tri.v0, &mut tri.v1, &mut tri.v2] {
-                let shifted = Vec3::new(v.x - center.x, v.y - center.y, v.z - center.z).rotate_y(angle);
-                v.x = shifted.x + center.x;
-                v.y = shifted.y + center.y;
-                v.z = shifted.z + center.z;
-            }
-        }
-    }
+    // fn rotate_y_about_axis(&mut self, angle: f32, axis: Option<Vec3>) {
+    //     let center = axis.unwrap_or_else(|| self.get_center());
+    //     for tri in &mut self.triangles {
+    //         for v in [&mut tri.v0, &mut tri.v1, &mut tri.v2] {
+    //             let shifted = Vec3::new(v.x - center.x, v.y - center.y, v.z - center.z).rotate_y(angle);
+    //             v.x = shifted.x + center.x;
+    //             v.y = shifted.y + center.y;
+    //             v.z = shifted.z + center.z;
+    //         }
+    //     }
+    // }
 
-    fn rotate_z_about_axis(&mut self, angle: f32, axis: Option<Vec3>) {
-        let center = axis.unwrap_or_else(|| self.get_center());
-        for tri in &mut self.triangles {
-            for v in [&mut tri.v0, &mut tri.v1, &mut tri.v2] {
-                let shifted = Vec3::new(v.x - center.x, v.y - center.y, v.z - center.z).rotate_z(angle);
-                v.x = shifted.x + center.x;
-                v.y = shifted.y + center.y;
-                v.z = shifted.z + center.z;
-            }
-        }
-    }
+    // fn rotate_z_about_axis(&mut self, angle: f32, axis: Option<Vec3>) {
+    //     let center = axis.unwrap_or_else(|| self.get_center());
+    //     for tri in &mut self.triangles {
+    //         for v in [&mut tri.v0, &mut tri.v1, &mut tri.v2] {
+    //             let shifted = Vec3::new(v.x - center.x, v.y - center.y, v.z - center.z).rotate_z(angle);
+    //             v.x = shifted.x + center.x;
+    //             v.y = shifted.y + center.y;
+    //             v.z = shifted.z + center.z;
+    //         }
+    //     }
+    // }
 
     fn get_center(&self) -> Vec3 {
-        let mut min = self.triangles[0].v0;
-        let mut max = self.triangles[0].v0;
+        let indice = self.triangles[0].return_indices(); 
+        let mut min = indice;
+        let mut max = indice;
         for tri in &self.triangles {
             for v in [&tri.v0, &tri.v1, &tri.v2] {
                 min.x = min.x.min(v.x);
@@ -281,24 +303,51 @@ impl Mesh {
     }
 }
 
-struct Entity{
-    mesh: Mesh,
-    transform: Mesh,
-}
 
 impl Entity{
     fn new() -> Self{
         Self{
             mesh: Mesh::new(),
-            transform: Mesh::new(),
+            transform: Transform::new(),
         }
     }
     fn load_obj(&mut self,path: &str) -> io::Result<()>{
         self.mesh = Mesh::from_obj(path)?;
-        self.transform = self.mesh.clone();
         Ok(())
     }
 }
+
+struct renderer{
+    zbuffer: ZBuffer,
+    screen_size: (u16,u16),
+    buffer: Vec<char>,
+    camera: Vec3,
+    render_buffer: Vec<Vec3>
+}
+impl renderer{
+    pub fn new() -> Self{
+        let term = terminal::get_terminal_size();
+        renderer { 
+            zbuffer: ZBuffer::new(&term),
+            screen_size: term,
+            buffer: Vec::new(),
+            camera: (Vec3::new(0.0,0.0,0.0)),
+            render_buffer: Vec::new(),
+        }
+    }
+    fn start_of_cycle(&mut self){
+        let term = terminal::get_terminal_size();
+        if term != self.screen_size{
+            self.zbuffer.resize(term);
+            self.buffer = vec![' '; term.0 as usize * term.1 as usize];
+            self.screen_size = term;
+        }
+    }
+
+    fn draw_entity(&mut self,entity: Entity){
+    }
+}
+
 
 
 fn intensity_to_char(intensity: f32) -> char {
@@ -325,29 +374,11 @@ fn main() {
 
 
 
-    let mut cube = Mesh::from_obj("obj/skull.obj").unwrap();
-    cube.shift(Vec3::new(0.0,0.0,20.0));
-
-    let mut second_cube = cube.clone();
-    second_cube.shift(Vec3::new(20.0,0.0,0.0));
-
-    // make floor 
-    let mut floor = Mesh::new();
+    let mut cube = Mesh::from_obj("obj/cube.obj").unwrap();
+    cube.shift(Vec3::new(0.0,0.0,5.0));
 
 
-    let z_offset = 30.0;
 
-    floor.triangles.push(Triangle::new(
-        Vec3::new(-50.0, -5.0,  50.0 + z_offset),
-        Vec3::new( 50.0, -5.0,  50.0 + z_offset),
-        Vec3::new( 50.0, -5.0, -50.0 + z_offset),
-    ));
-
-    floor.triangles.push(Triangle::new(
-        Vec3::new(-50.0, -5.0,  50.0 + z_offset),
-        Vec3::new( 50.0, -5.0, -50.0 + z_offset),
-        Vec3::new(-50.0, -5.0, -50.0 + z_offset),
-    ));
     //cube.rotate_z_about_axis(90.0, None);
     //cube.rotate_x_about_axis(70.0, None);
 
@@ -371,12 +402,8 @@ fn main() {
         buffer.fill(' '); 
 
         let mut mesh = cube.clone();
-        let mut secon_mesh = second_cube.clone();
-        mesh.rotate_x_about_axis(angle, None);
         mesh.rotate_y_about_axis(angle, None);
-
-        secon_mesh.rotate_x_about_axis(-angle, None);
-        secon_mesh.rotate_y_about_axis(-angle, None);
+        // mesh.rotate_z_about_axis(angle, None);
 
         mesh.shift(offset);
    //     draw_mesh(&secon_mesh, term_size, &mut z_buffer, &mut buffer, &camera);
