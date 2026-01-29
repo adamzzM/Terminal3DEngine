@@ -83,6 +83,10 @@ impl Transform{
         self.world = new_world;
         self.dirty = false;
     }
+    pub fn mat4(&mut self) -> Mat4{
+        self.recalucate_world();
+        self.world.clone()
+    }
 }
 
 
@@ -112,6 +116,7 @@ impl ZBuffer {
             false
         }
     }
+
     pub fn resize(&mut self, term_size: (u16, u16)) {
         let new_width  = term_size.0 as usize;
         let new_height = term_size.1 as usize;
@@ -282,17 +287,21 @@ impl Mesh {
     // }
 
     fn get_center(&self) -> Vec3 {
-        let indice = self.triangles[0].return_indices(); 
-        let mut min = indice;
-        let mut max = indice;
+        let mut indices = self.triangles[0].return_indices(); 
+
+        let mut min = self.points[indices.0];
+        let mut max = self.points[indices.0];
+
         for tri in &self.triangles {
-            for v in [&tri.v0, &tri.v1, &tri.v2] {
-                min.x = min.x.min(v.x);
-                min.y = min.y.min(v.y);
-                min.z = min.z.min(v.z);
-                max.x = max.x.max(v.x);
-                max.y = max.y.max(v.y);
-                max.z = max.z.max(v.z);
+            indices = tri.return_indices();
+            for v in &[indices.0,indices.1,indices.2] {
+                min.x = min.x.min(self.points[*v].x);
+                min.y = min.y.min(self.points[*v].y);
+                min.z = min.y.min(self.points[*v].z);
+
+                max.x = max.x.max(self.points[*v].x);
+                max.y = max.y.max(self.points[*v].y);
+                max.z = max.z.max(self.points[*v].z);
             }
         }
         Vec3 {
@@ -312,28 +321,43 @@ impl Entity{
         }
     }
     fn load_obj(&mut self,path: &str) -> io::Result<()>{
-        self.mesh = Mesh::from_obj(path)?;
+        self.mesh.from_obj(path)?;
         Ok(())
     }
 }
 
-struct renderer{
+struct Renderer{
     zbuffer: ZBuffer,
     screen_size: (u16,u16),
     buffer: Vec<char>,
     camera: Vec3,
-    render_buffer: Vec<Vec3>
+    render_buffer: Vec<Vec3>,
+    light_dir: Vec3,
 }
-impl renderer{
+
+impl Renderer{
     pub fn new() -> Self{
         let term = terminal::get_terminal_size();
-        renderer { 
+        let mut light_dir = Vec3::new(0.5,-0.5,-1.0);
+        light_dir.normalize();
+        Renderer { 
             zbuffer: ZBuffer::new(&term),
             screen_size: term,
             buffer: Vec::new(),
             camera: (Vec3::new(0.0,0.0,0.0)),
             render_buffer: Vec::new(),
+            light_dir,
+
+
         }
+    }
+    fn calculate_light_dir() -> Vec3 {
+        // todo change all of this 
+        let mut light_dir = Vec3::new(0.5, -0.5, -1.0);
+        light_dir.normalize();
+
+        light_dir
+
     }
     fn start_of_cycle(&mut self){
         let term = terminal::get_terminal_size();
@@ -343,8 +367,40 @@ impl renderer{
             self.screen_size = term;
         }
     }
+    fn apply_transform_to_buffer(&mut self,entity: &mut Entity){
+        let mat4 = entity.transform.mat4();
+        
+        self.render_buffer.resize(entity.mesh.points.len(),Vec3::new(0.0,0.0,0.0));
 
-    fn draw_entity(&mut self,entity: Entity){
+        for (itera,item) in entity.mesh.points.iter().enumerate(){
+            self.render_buffer[itera] = item * mat4; 
+        }
+    }
+
+    fn draw_entity(&mut self,entity: &mut Entity){
+        self.apply_transform_to_buffer(entity);
+
+
+        for tri in &mesh.triangles {
+            let normal = tri.normal();
+            
+            // only draw if facing camera
+            let view_dir = Vec3::new(0.0, 0.0, -1.0);
+            let dot = normal.dot(view_dir);
+            if dot <= 0.0 {
+                continue;
+            }
+            // only draw if visible to camera TODO
+            
+            let intensity = calculate_lighting(normal, self.light_dir);
+            let ch = intensity_to_char(intensity);
+            
+            fill_triangle(tri, ch, screen_size, z_buffer,buffer,camera);
+        }
+
+
+
+        
     }
 }
 
@@ -352,9 +408,11 @@ impl renderer{
 
 fn intensity_to_char(intensity: f32) -> char {
     let chars = [
-    ' ', '`', '.', '\'', ',', ':', ';', '"', '^', 
-    '-', '~', '=', '+', '*', 'o', 'O', '#', '%', '@', '█'
+    ' ', '`', '.', ',', '\'', ':', ';', '-' , '^', 
+     '~', '=', '+', '*', '!' ,'o', 'O', '#', '%', '@', '█'
     ];
+    0.5 
+
     let gamma = intensity.powf(0.6);
     let idx = (gamma * (chars.len() - 1) as f32) as usize;
     chars[idx.min(chars.len() - 1)]

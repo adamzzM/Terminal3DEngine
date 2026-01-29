@@ -1,6 +1,7 @@
 
 use std::ops::Mul;
 
+#[derive(Clone)]
 pub struct Mat4{
     m: [f32; 16]
 }
@@ -8,12 +9,13 @@ pub struct Mat4{
 impl Mat4{
 
     pub fn new() -> Self{
+        // an identity matrix
         let mut m = [0.0; 16];
         m[0] = 1.0;
         m[5] = 1.0;
         m[10] = 1.0;
         m[15] = 1.0;
-        return Mat4 { m: m }
+        Mat4 { m }
     }
 
     pub fn translation(&mut self,t: &Vec3){
@@ -204,6 +206,12 @@ impl Vec3 {
     }
     pub fn dot(&self, other: Vec3) -> f32 {
         self.x * other.x + self.y * other.y + self.z * other.z
+    }
+    pub fn normalize(&mut self) {
+        let len = ((self.x * self.x) + (self.y * self.y) + (self.z * self.z)).sqrt();
+        self.x = self.x / len;
+        self.y = self.y / len;
+        self.z = self.z / len;
     }
 }
 
