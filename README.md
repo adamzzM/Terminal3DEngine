@@ -2,7 +2,7 @@
 3d engine fully implemented in rust (almost) no external libraries except for some minor windows api things for getting the terminal size and input
 
 Skull spinning
-![Skull Spinning](imgs/skull_spinning.mp4)
+![Skull Spinning](imgs/skull_spinning.gif)
 
 
 Basic ahh 3d engine
