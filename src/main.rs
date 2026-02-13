@@ -1,19 +1,19 @@
-use std::{io::{self, Write}, time::Duration}; 
+use std::{collections::HashMap, io::{self, Write}, time::Duration}; 
 use std::thread::sleep; 
 use std::fs::File; 
 use std::io::BufRead; 
 use std::path::Path; 
 use std::time::Instant; 
 
+
+
 mod algebra;
 mod input; 
 mod terminal;
 
-
 use algebra::{Vec3,Vec4,Mat4,Triangle};
 
 
-const EPS: f32 = 1e-5;
 
 struct Entity {
     transform: Transform,
@@ -30,14 +30,17 @@ struct Transform{
 }
 impl Transform{
     pub fn new() -> Self{
-        let pos = Vec3::new(0.0,0.0,0.0);
+        let pos = Vec3::new(0.0,0.0,5.0);
         let rotation = Vec4::new(0.0,0.0,0.0,1.0);
         let scale = Vec3::new(1.0,1.0,1.0);
-        let mut world = Mat4::new();
+        let mut pos_mat = Mat4::new();
+        let mut rot_mat = Mat4::new();
+        let mut scale_mat = Mat4::new();
 
-        world.scale(&scale);
-        world.rotation(&rotation);
-        world.translation(&pos);
+        scale_mat.scale(&scale);
+        rot_mat.rotation(&rotation);
+        pos_mat.translation(&pos);
+        let world = scale_mat * rot_mat * pos_mat;
 
 
         Transform {
@@ -129,11 +132,13 @@ impl ZBuffer {
 }
 
 
+type PosKey = (i32,i32,i32);
 
 #[derive(Clone)]
 struct Mesh {
     points: Vec<Vec3>,
     triangles: Vec<Triangle>,
+    map: HashMap<PosKey,usize>,
 }
 
 impl Mesh {
@@ -141,39 +146,49 @@ impl Mesh {
         Self {
             points: Vec::new(),
             triangles: Vec::new(),
+            map: HashMap::new()
         }
     }
 
-    // area for optimizatioonnnn
-    fn add_triangle(&mut self,p1: Vec3,p2: Vec3,p3: Vec3){
-        let mut values: [isize; 3] = [-1 ; 3];
 
-        for (i,j) in self.points.iter().enumerate(){
-            if j.approx_eq(&p1, EPS){
-                values[0] = i as isize; 
-            }
-            if j.approx_eq(&p2, EPS){
-                values[1] = i as isize; 
-            }
-            if j.approx_eq(&p3, EPS){
-                values[2] = i as isize; 
-            }
-        }
-        if values[0] == -1{
-           self.points.push(p1);
-           values[0] = (self.points.len() - 1 ) as isize; // for consistency
-        }
-        if values[1] == -1{
-            self.points.push(p2);   
-           values[1] = (self.points.len() - 1) as isize;
-        }
-        if values[2] == -1{
-           self.points.push(p3);
-           values[2] = (self.points.len() - 1) as isize;
-        }
-        self.triangles.push(algebra::Triangle::new(values[0] as usize,values[1] as usize,values[2] as usize));
 
+    fn add_triangle(&mut self, p1: Vec3, p2: Vec3, p3: Vec3) {
+
+        fn quantize(v: f32) -> i32 {
+            (v * 1000.0).round() as i32
+        }
+
+        fn make_key(v: &Vec3) -> (i32, i32, i32) {
+            (quantize(v.x), quantize(v.y), quantize(v.z))
+        }
+
+        let mut values = [0usize; 3];
+
+        for (i, (key, point)) in [
+            (make_key(&p1), p1),
+            (make_key(&p2), p2),
+            (make_key(&p3), p3),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let index = *self.map.entry(*key).or_insert_with(|| {
+                self.points.push(*point);
+                self.points.len() - 1
+            });
+
+            values[i] = index;
+        }
+
+        self.triangles.push(algebra::Triangle::new(
+            values[0],
+            values[1],
+            values[2],
+        ));
     }
+
+    
+
 
     fn from_obj(&mut self, path: &str) -> io::Result<()> {
         let file = File::open(Path::new(path))?;
@@ -207,84 +222,20 @@ impl Mesh {
                         })
                         .collect();
                     if indices.len() == 3 {
-
                         self.add_triangle(vertices[indices[0]],vertices[indices[1]],vertices[indices[2]]);
-                        // triangles.push(Triangle::new(
-                        //     vertices[indices[0]],
-                        //     vertices[indices[1]],
-                        //     vertices[indices[2]],
-                        // ));
                     } else if indices.len() == 4 {
                         self.add_triangle(vertices[indices[0]],vertices[indices[1]],vertices[indices[2]]);
-
                         self.add_triangle(vertices[indices[0]],vertices[indices[2]],vertices[indices[3]]);
-                        // triangles.push(Triangle::new(
-                        //     vertices[indices[0]],
-                        //     vertices[indices[1]],
-                        //     vertices[indices[2]],
-                        // ));
-                        // triangles.push(Triangle::new(
-                        //     vertices[indices[0]],
-                        //     vertices[indices[2]],
-                        //     vertices[indices[3]],
-                        // ));
                     }
                 }
                 _ => {}
             }
         }
+        self.map.clear();
         Ok(())
     }
 
-    // fn shift(&mut self, offset: Vec3) {
-    //     for tri in &mut self.triangles {
-    //         tri.v0.x += offset.x;
-    //         tri.v0.y += offset.y;
-    //         tri.v0.z += offset.z;
-    //         tri.v1.x += offset.x;
-    //         tri.v1.y += offset.y;
-    //         tri.v1.z += offset.z;
-    //         tri.v2.x += offset.x;
-    //         tri.v2.y += offset.y;
-    //         tri.v2.z += offset.z;
-    //     }
-    // }
 
-    // fn rotate_x_about_axis(&mut self, angle: f32, axis: Option<Vec3>) {
-    //     let center = axis.unwrap_or_else(|| self.get_center());
-    //     for tri in &mut self.triangles {
-    //         for v in [&mut tri.v0, &mut tri.v1, &mut tri.v2] {
-    //             let shifted = Vec3::new(v.x - center.x, v.y - center.y, v.z - center.z).rotate_x(angle);
-    //             v.x = shifted.x + center.x;
-    //             v.y = shifted.y + center.y;
-    //             v.z = shifted.z + center.z;
-    //         }
-    //     }
-    // }
-
-    // fn rotate_y_about_axis(&mut self, angle: f32, axis: Option<Vec3>) {
-    //     let center = axis.unwrap_or_else(|| self.get_center());
-    //     for tri in &mut self.triangles {
-    //         for v in [&mut tri.v0, &mut tri.v1, &mut tri.v2] {
-    //             let shifted = Vec3::new(v.x - center.x, v.y - center.y, v.z - center.z).rotate_y(angle);
-    //             v.x = shifted.x + center.x;
-    //             v.y = shifted.y + center.y;
-    //             v.z = shifted.z + center.z;
-    //         }
-    //     }
-    // }
-
-    // fn rotate_z_about_axis(&mut self, angle: f32, axis: Option<Vec3>) {
-    //     let center = axis.unwrap_or_else(|| self.get_center());
-    //     for tri in &mut self.triangles {
-    //         for v in [&mut tri.v0, &mut tri.v1, &mut tri.v2] {
-    //             let shifted = Vec3::new(v.x - center.x, v.y - center.y, v.z - center.z).rotate_z(angle);
-    //             v.x = shifted.x + center.x;
-    //             v.y = shifted.y + center.y;
-    //             v.z = shifted.z + center.z;
-    //         }
-    //     }
-    // }
 
     fn get_center(&self) -> Vec3 {
         let mut indices = self.triangles[0].return_indices(); 
@@ -336,55 +287,188 @@ struct Renderer{
 }
 
 impl Renderer{
+
+    // TODO REPLACE ALL .resolve WITH THIS
+    fn resolve_point(camera: &Vec3,point: &Vec3) -> Option<(f32,f32)>{
+        
+        let rel_x = point.x - camera.x;
+        let rel_y= point.y - camera.y;
+        let rel_z = point.z - camera.z;
+
+
+        const MIN: f32 = 0.1;
+        if rel_z < MIN {
+            return None;
+        }
+        const K1: f32 = 1.2;
+        let new_x = ((rel_x * K1) / rel_z) + 0.5;
+        let new_y = ((rel_y * K1) / rel_z) + 0.5;
+        Some((new_x, new_y))
+    }
+
     pub fn new() -> Self{
         let term = terminal::get_terminal_size();
         let mut light_dir = Vec3::new(0.5,-0.5,-1.0);
+
+        let mut buffer: Vec<char> = Vec::new();
+
+        buffer = vec![' '; term.0 as usize * term.1 as usize];
+
         light_dir.normalize();
         Renderer { 
             zbuffer: ZBuffer::new(&term),
             screen_size: term,
-            buffer: Vec::new(),
+            buffer: buffer,
             camera: (Vec3::new(0.0,0.0,0.0)),
             render_buffer: Vec::new(),
             light_dir,
-
-
         }
     }
-    fn calculate_light_dir() -> Vec3 {
-        // todo change all of this 
-        let mut light_dir = Vec3::new(0.5, -0.5, -1.0);
-        light_dir.normalize();
 
-        light_dir
+    fn render(&mut self,entities: &mut Vec<Entity>){
 
-    }
-    fn start_of_cycle(&mut self){
+        const TARGET_FPS: u64 = 60;
+        const FRAME_TIME: Duration = Duration::from_millis(1000 / TARGET_FPS);
+
+
+        let frame_start = Instant::now();
+
+
+
+
         let term = terminal::get_terminal_size();
         if term != self.screen_size{
             self.zbuffer.resize(term);
             self.buffer = vec![' '; term.0 as usize * term.1 as usize];
             self.screen_size = term;
         }
+        
+
+        
+
+        for entity in entities{
+            self.draw_entity(entity);
+        } 
+
+
+        self.render_buffer();
+
+        self.buffer.fill(' ');
+        self.zbuffer.depths.fill(f32::INFINITY);
+     
+       let frame_elapsed = frame_start.elapsed();
+            if frame_elapsed < FRAME_TIME {
+                sleep(FRAME_TIME - frame_elapsed);
+       }
+
     }
+
     fn apply_transform_to_buffer(&mut self,entity: &mut Entity){
         let mat4 = entity.transform.mat4();
         
         self.render_buffer.resize(entity.mesh.points.len(),Vec3::new(0.0,0.0,0.0));
 
         for (itera,item) in entity.mesh.points.iter().enumerate(){
-            self.render_buffer[itera] = item * mat4; 
+            self.render_buffer[itera] = &mat4 * *item; 
         }
     }
 
+    fn fill_triangle(&mut self,tri: &Triangle,ch: char){
+
+        let (t0,t1,t2) = tri.return_indices();
+
+        let r0 = self.render_buffer[t0].resolve(&self.camera);
+        let r1= self.render_buffer[t1].resolve(&self.camera);
+        let r2 = self.render_buffer[t2].resolve(&self.camera);
+
+        if r0.is_none() || r1.is_none() || r2.is_none() {
+            return;
+        }
+
+        let (nx0, ny0) = r0.unwrap();
+        let (nx1, ny1) = r1.unwrap();
+        let (nx2, ny2) = r2.unwrap();
+
+        let x0 = (self.screen_size.0 as f32 * nx0).round() as i32;
+        let y0 = (self.screen_size.1 as f32 * ny0).round() as i32;
+        let x1 = (self.screen_size.0 as f32 * nx1).round() as i32;
+        let y1 = (self.screen_size.1 as f32 * ny1).round() as i32;
+        let x2 = (self.screen_size.0 as f32 * nx2).round() as i32;
+        let y2 = (self.screen_size.1 as f32 * ny2).round() as i32;
+
+        let min_x = x0.min(x1).min(x2).max(0);
+        let max_x = x0.max(x1).max(x2).min(self.screen_size.0 as i32 - 1);
+        let min_y = y0.min(y1).min(y2).max(0);
+        let max_y = y0.max(y1).max(y2).min(self.screen_size.1 as i32 - 1);
+
+        for py in min_y..=max_y {
+            for px in min_x..=max_x {
+                let (w0, w1, w2) = self.barycentric(px, py, x0, y0, x1, y1, x2, y2);
+                
+                if w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0 {
+                    let z = w0 * self.render_buffer[t0].z + w1 * self.render_buffer[t1].z + w2 * self.render_buffer[t2].z; // interpolated depth
+                    
+                    if self.zbuffer.test_and_set(px as usize, py as usize, z) {
+                        draw_pixel_to_buffer(px as u16, py as u16, ch,&mut self.buffer,self.screen_size);
+                    }
+                }
+            }
+        }
+
+    }
+
+
+    fn intensity_to_char(&self,intensity: f32) -> char {
+        let chars = [
+        ' ', '`', '.', ',', '\'', ':', ';', '-' , '^', 
+        '~', '=', '+', '*', '!' ,'o', 'O', '#', '%', '@', '█'
+        ];
+
+        let gamma = intensity.powf(0.6);
+        let idx = (gamma * (chars.len() - 1) as f32) as usize;
+        chars[idx.min(chars.len() - 1)]
+    }
+
+    fn calculate_lighting(&self,normal: Vec3, light_dir: Vec3) -> f32 {
+        let light_fall_off = 0.3;
+        let dot = normal.dot(light_dir);
+        let distance_fade = (1.0 / (1.0 + normal.z * light_fall_off)).clamp(0.1, 1.0);
+        (dot * distance_fade).max(0.0)
+    }
+
+
+    fn barycentric(&self,px: i32, py: i32, x0: i32, y0: i32, x1: i32, y1: i32, x2: i32, y2: i32) -> (f32, f32, f32) {
+        let denom = ((y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2)) as f32;
+        if denom.abs() < 0.001 {
+            return (-1.0, -1.0, -1.0);
+        }
+        let w0 = ((y1 - y2) * (px - x2) + (x2 - x1) * (py - y2)) as f32 / denom;
+        let w1 = ((y2 - y0) * (px - x2) + (x0 - x2) * (py - y2)) as f32 / denom;
+        let w2 = 1.0 - w0 - w1;
+        (w0, w1, w2)
+    }
+
+
+    fn render_buffer(&self) {
+        let mut stdout = io::stdout();
+        for y in 0..self.screen_size.1 {
+            write!(stdout, "\x1B[{};1H", y + 1).unwrap(); // move cursor to beginning of line 
+            for x in 0..self.screen_size.0 {
+                let idx = (y as usize) * (self.screen_size.0 as usize) + (x as usize);
+                let ch = self.buffer[idx];
+                write!(stdout, "{}", ch).unwrap();
+            }
+        }
+        stdout.flush().unwrap();
+    }
+
     fn draw_entity(&mut self,entity: &mut Entity){
-        self.apply_transform_to_buffer(entity);
+        self.apply_transform_to_buffer(entity); // local buffer of points
 
 
-        for tri in &mesh.triangles {
-            let normal = tri.normal();
+        for tri in &entity.mesh.triangles {
+            let normal = tri.normal(&self.render_buffer);
             
-            // only draw if facing camera
             let view_dir = Vec3::new(0.0, 0.0, -1.0);
             let dot = normal.dot(view_dir);
             if dot <= 0.0 {
@@ -392,202 +476,52 @@ impl Renderer{
             }
             // only draw if visible to camera TODO
             
-            let intensity = calculate_lighting(normal, self.light_dir);
-            let ch = intensity_to_char(intensity);
+            let intensity = self.calculate_lighting(normal, self.light_dir);
+            let ch = self.intensity_to_char(intensity);
             
-            fill_triangle(tri, ch, screen_size, z_buffer,buffer,camera);
+            self.fill_triangle(tri, ch);
         }
-
-
-
         
     }
 }
 
 
 
-fn intensity_to_char(intensity: f32) -> char {
-    let chars = [
-    ' ', '`', '.', ',', '\'', ':', ';', '-' , '^', 
-     '~', '=', '+', '*', '!' ,'o', 'O', '#', '%', '@', '█'
-    ];
-    0.5 
 
-    let gamma = intensity.powf(0.6);
-    let idx = (gamma * (chars.len() - 1) as f32) as usize;
-    chars[idx.min(chars.len() - 1)]
-}
 
 fn main() {
-    const TARGET_FPS: u64 = 60;
-    const FRAME_TIME: Duration = Duration::from_millis(1000 / TARGET_FPS);
+    
 
-    let mut term_size = terminal::get_terminal_size();
+    let mut renderer = Renderer::new();
 
-    let mut buffer: Vec<char> = vec![' '; term_size.0 as usize * term_size.1 as usize];
+    let mut entities: Vec<Entity> = Vec::new();
 
-    let mut new_cube = Entity::new();
-    let _ = new_cube.load_obj("obj/skull.obj").expect("failed to load obj");
+    let mut cube = Entity::new();
+    let _ = cube.load_obj("obj/skull.obj");
 
+    cube.transform.scale_by(Vec3::new(0.01,0.01,0.01));
+    cube.transform.translate(&Vec3 { x: 0.0, y: 0.0 , z: 45.0 });
+    
 
+    entities.push(cube);
 
-
-    let mut cube = Mesh::from_obj("obj/cube.obj").unwrap();
-    cube.shift(Vec3::new(0.0,0.0,5.0));
-
-
-
-    //cube.rotate_z_about_axis(90.0, None);
-    //cube.rotate_x_about_axis(70.0, None);
-
-    let mut angle = 0.0;
-    let mut offset = Vec3::new(0.0,0.0,0.0);
-
-    let mut camera = Vec3::new(0.0,0.0,0.0);
 
     loop {
-
-        if term_size != terminal::get_terminal_size() {
-            term_size = terminal::get_terminal_size();
-            buffer = vec![' '; term_size.0 as usize * term_size.1 as usize];
-        }
-
-        let frame_start = Instant::now();
-        let mut z_buffer = ZBuffer::new(&term_size);
-
-
-        render_buffer(&buffer, term_size);
-        buffer.fill(' '); 
-
-        let mut mesh = cube.clone();
-        mesh.rotate_y_about_axis(angle, None);
-        // mesh.rotate_z_about_axis(angle, None);
-
-        mesh.shift(offset);
-   //     draw_mesh(&secon_mesh, term_size, &mut z_buffer, &mut buffer, &camera);
-        draw_mesh(&mesh, term_size, &mut z_buffer,&mut buffer,&camera);
-
-        angle += 0.06;
-        //camera.x += 0.2;
-        //offset.z -= 0.06;
-
-        if let Some(key) = input::poll_key() {
-            match key {
-                b'w' => camera.z += 1.0,
-                b's' => camera.z -= 1.0,
-                b'a' => camera.x -= 1.0,
-                b'd' => camera.x += 1.0,
-                b'q' => break,
-                _ => {}
-            }
-        }
-
-        let frame_elapsed = frame_start.elapsed();
-        if frame_elapsed < FRAME_TIME {
-            sleep(FRAME_TIME - frame_elapsed);
+        renderer.render(&mut entities);
+        for entity in &mut entities{
+            entity.transform.rotate(&Vec4::new(0.04, 0.04, 0.0, 1.0));
         }
     }
-}
 
+   
 
-fn draw_mesh(mesh: &Mesh, screen_size: (u16, u16), z_buffer: &mut ZBuffer,buffer: &mut Vec<char>,camera: &Vec3) {
-    let light_dir = Vec3::new(0.5, -0.5, -1.0);
-    let len = (light_dir.x * light_dir.x + light_dir.y * light_dir.y + light_dir.z * light_dir.z).sqrt();
-    let light_dir = Vec3::new(light_dir.x / len, light_dir.y / len, light_dir.z / len);
-
-    for tri in &mesh.triangles {
-        let normal = tri.normal();
         
-        // only draw if facing camera
-        let view_dir = Vec3::new(0.0, 0.0, -1.0);
-        let dot = normal.dot(view_dir);
-        if dot <= 0.0 {
-            continue;
-        }
-        // only draw if visible to camera TODO
-        
-        let intensity = calculate_lighting(normal, light_dir);
-        let ch = intensity_to_char(intensity);
-        
-        fill_triangle(tri, ch, screen_size, z_buffer,buffer,camera);
-    }
 }
 
-
-fn calculate_lighting(normal: Vec3, light_dir: Vec3) -> f32 {
-    let light_fall_off = 0.3;
-    let dot = normal.dot(light_dir);
-    let distance_fade = (1.0 / (1.0 + normal.z * light_fall_off)).clamp(0.1, 1.0);
-    (dot * distance_fade).max(0.0)
-}
-
-fn fill_triangle(tri: &Triangle, ch: char, screen_size: (u16, u16), z_buffer: &mut ZBuffer,buffer: &mut Vec<char>,camera: &Vec3) {
-    let r0 = tri.v0.resolve(camera);
-    let r1 = tri.v1.resolve(camera);
-    let r2 = tri.v2.resolve(camera);
-
-    if r0.is_none() || r1.is_none() || r2.is_none() {
-        return;
-    }
-
-    let (nx0, ny0) = r0.unwrap();
-    let (nx1, ny1) = r1.unwrap();
-    let (nx2, ny2) = r2.unwrap();
-
-    let x0 = (screen_size.0 as f32 * nx0).round() as i32;
-    let y0 = (screen_size.1 as f32 * ny0).round() as i32;
-    let x1 = (screen_size.0 as f32 * nx1).round() as i32;
-    let y1 = (screen_size.1 as f32 * ny1).round() as i32;
-    let x2 = (screen_size.0 as f32 * nx2).round() as i32;
-    let y2 = (screen_size.1 as f32 * ny2).round() as i32;
-
-    let min_x = x0.min(x1).min(x2).max(0);
-    let max_x = x0.max(x1).max(x2).min(screen_size.0 as i32 - 1);
-    let min_y = y0.min(y1).min(y2).max(0);
-    let max_y = y0.max(y1).max(y2).min(screen_size.1 as i32 - 1);
-
-    for py in min_y..=max_y {
-        for px in min_x..=max_x {
-            let (w0, w1, w2) = barycentric(px, py, x0, y0, x1, y1, x2, y2);
-            
-            if w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0 {
-                let z = w0 * tri.v0.z + w1 * tri.v1.z + w2 * tri.v2.z;  // interpolated depth
-                
-                if z_buffer.test_and_set(px as usize, py as usize, z) {
-                    draw_pixel_to_buffer(px as u16, py as u16, ch,buffer,screen_size);
-                }
-            }
-        }
-    }
-}
-
-fn barycentric(px: i32, py: i32, x0: i32, y0: i32, x1: i32, y1: i32, x2: i32, y2: i32) -> (f32, f32, f32) {
-    let denom = ((y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2)) as f32;
-    if denom.abs() < 0.001 {
-        return (-1.0, -1.0, -1.0);
-    }
-    let w0 = ((y1 - y2) * (px - x2) + (x2 - x1) * (py - y2)) as f32 / denom;
-    let w1 = ((y2 - y0) * (px - x2) + (x0 - x2) * (py - y2)) as f32 / denom;
-    let w2 = 1.0 - w0 - w1;
-    (w0, w1, w2)
-}
 
 fn draw_pixel_to_buffer(x: u16, y: u16, ch: char, buffer: &mut Vec<char>, screen_size: (u16, u16)) {
     let idx = (y as usize) * (screen_size.0 as usize) + (x as usize);
     if idx < buffer.len() {
         buffer[idx] = ch;
     }
-}
-
-fn render_buffer(buffer: &Vec<char>, screen_size: (u16, u16)) {
-    let mut stdout = io::stdout();
-    for y in 0..screen_size.1 {
-        write!(stdout, "\x1B[{};1H", y + 1).unwrap(); // move cursor to beginning of line 
-        for x in 0..screen_size.0 {
-            let idx = (y as usize) * (screen_size.0 as usize) + (x as usize);
-            let ch = buffer[idx];
-            write!(stdout, "{}", ch).unwrap();
-        }
-    }
-    stdout.flush().unwrap();
 }

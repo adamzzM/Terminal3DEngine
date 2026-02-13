@@ -104,6 +104,18 @@ impl Mul<Vec3> for Mat4 {
     }
 }
 
+impl Mul<Vec3> for &Mat4 {
+    type Output = Vec3;
+
+    fn mul(self, v: Vec3) -> Vec3 {
+        Vec3 {
+            x: self.m[0]  * v.x + self.m[4]  * v.y + self.m[8]  * v.z + self.m[12],
+            y: self.m[1]  * v.x + self.m[5]  * v.y + self.m[9]  * v.z + self.m[13],
+            z: self.m[2]  * v.x + self.m[6]  * v.y + self.m[10] * v.z + self.m[14],
+        }
+    }
+}
+
 
 #[derive(Copy,Clone)]
 pub struct Vec4{
@@ -152,6 +164,7 @@ impl Vec3 {
         Self { x, y, z }
     }
 
+    // tbr
     pub fn resolve(&self,camera: &Vec3) -> Option<(f32, f32)> {
 
         let rel_x = self.x - camera.x;
@@ -237,21 +250,25 @@ impl Triangle {
         (self.v0,self.v1,self.v2)
     }
 
-    // pub fn normal(&self,points: Vec<Vec3>) -> Vec3 {
-    //     let edge1 = Vec3::new(
-    //         self.v1.x - self.v0.x,
-    //         self.v1.y - self.v0.y,
-    //         self.v1.z - self.v0.z,
-    //     );
-    //     let edge2 = Vec3::new(
-    //         self.v2.x - self.v0.x,
-    //         self.v2.y - self.v0.y,
-    //         self.v2.z - self.v0.z,
-    //     );
-    //     let nx = edge1.y * edge2.z - edge1.z * edge2.y;
-    //     let ny = edge1.z * edge2.x - edge1.x * edge2.z;
-    //     let nz = edge1.x * edge2.y - edge1.y * edge2.x;
-    //     let len = (nx * nx + ny * ny + nz * nz).sqrt();
-    //     Vec3::new(nx / len, ny / len, nz / len)
-    // }
+
+    pub fn normal(&self,points: &Vec<Vec3>) -> Vec3 {
+
+        let edge1 = Vec3::new(
+            points[self.v1].x - points[self.v0].x,
+            points[self.v1].y - points[self.v0].y,
+            points[self.v1].z - points[self.v0].z,
+        );
+        let edge2 = Vec3::new(
+            points[self.v2].x - points[self.v0].x,
+            points[self.v2].y - points[self.v0].y,
+            points[self.v2].z - points[self.v0].z,
+        );
+
+
+        let nx = edge1.y * edge2.z - edge1.z * edge2.y;
+        let ny = edge1.z * edge2.x - edge1.x * edge2.z;
+        let nz = edge1.x * edge2.y - edge1.y * edge2.x;
+        let len = (nx * nx + ny * ny + nz * nz).sqrt();
+        Vec3::new(nx / len, ny / len, nz / len)
+    }
 }
