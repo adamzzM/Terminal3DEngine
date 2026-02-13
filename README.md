@@ -1,8 +1,12 @@
 
 3d engine fully implemented in rust (almost) no external libraries except for some minor windows api things for getting the terminal size and input
 
-Skull spinning
-![Skull Spinning](imgs/skull_spinning.gif)
+
+### spinning skull
+<p align="center">
+
+  <img src="imgs/skull_spinning.gif" width="500">
+</p>
 
 
 Basic ahh 3d engine
@@ -15,3 +19,13 @@ Also I was forced to learn some optimization and what my code was actually doing
 3Blue1Browns series is a life saver
 
 This is probably one of the first times actually switching from a quadratic time complexity solution to instantenous was actually noticable 
+
+## Running it
+
+You need to have [cargo](https://doc.rust-lang.org/cargo/getting-started/installation.html) installed 
+
+clone the project `git clone https://github.com/adamzzM/Terminal3DEngine`
+
+*important* before running you need to have an object file and have it linked in the main.rs currenly the preview is done with skull.obj (i dont remember where I got it from)
+
+and then run `cargo run` inside of the folder
