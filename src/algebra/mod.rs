@@ -1,4 +1,3 @@
-
 use std::ops::Mul;
 
 #[derive(Clone)]
@@ -19,12 +18,15 @@ impl Mat4{
     }
 
     pub fn translation(&mut self,t: &Vec3){
+        *self = Mat4::new();
         self.m[12] = t.x;
         self.m[13] = t.y;
         self.m[14] = t.z;
     }
 
     pub fn scale(&mut self,t: &Vec3){
+
+        *self = Mat4::new();
         self.m[0] = t.x;
         self.m[5] =  t.y;
         self.m[10] = t.z;
@@ -32,6 +34,7 @@ impl Mat4{
     }
 
     pub fn rotation(&mut self, q: &Vec4) {
+        // lord bless chatgpt
         let xx = q.x * q.x;
         let yy = q.y * q.y;
         let zz = q.z * q.z;
@@ -46,17 +49,18 @@ impl Mat4{
         self.m[15] = 1.0;
 
         self.m[0]  = 1.0 - 2.0 * (yy + zz);
-        self.m[1]  = 2.0 * (xy + wz);
-        self.m[2]  = 2.0 * (xz - wy);
+        self.m[1]  = 2.0 * (xy - wz);   // was m[4]'s value
+        self.m[2]  = 2.0 * (xz + wy);   // was m[8]'s value
 
-        self.m[4]  = 2.0 * (xy - wz);
+        self.m[4]  = 2.0 * (xy + wz);   // was m[1]'s value
         self.m[5]  = 1.0 - 2.0 * (xx + zz);
-        self.m[6]  = 2.0 * (yz + wx);
+        self.m[6]  = 2.0 * (yz - wx);   // was m[9]'s value
 
-        self.m[8]  = 2.0 * (xz + wy);
-        self.m[9]  = 2.0 * (yz - wx);
+        self.m[8]  = 2.0 * (xz - wy);   // was m[2]'s value
+        self.m[9]  = 2.0 * (yz + wx);   // was m[6]'s value
         self.m[10] = 1.0 - 2.0 * (xx + yy);
-        }
+
+    }
 }
 
 impl Mul for Mat4{
@@ -117,7 +121,7 @@ impl Mul<Vec3> for &Mat4 {
 }
 
 
-#[derive(Copy,Clone)]
+#[derive(Copy,Clone,Debug)]
 pub struct Vec4{
     x: f32,
     y: f32,
@@ -130,10 +134,14 @@ impl Vec4{
         Self { x, y, z, w }
     }
     pub fn normalize(&mut self){
-        let len = (self.x*self.x + self.y*self.y + self.z*self.z + self.w*self.w).sqrt();
-        self.x = self.x / len;
-        self.y = self.y / len;
-        self.z = self.z / len;
+        let len = (self.x*self.x + self.y*self.y + self.z*self.z + self.w*self.w).sqrt().recip();
+        self.x = self.x * len;
+        self.y = self.y * len;
+        self.z = self.z * len;
+        self.w = self.w * len;
+    }
+    pub fn return_items(&self) -> (f32,f32,f32,f32){
+        (self.x,self.y,self.z,self.w)
     }
 }
 
@@ -152,7 +160,7 @@ impl Mul for Vec4 {
 }
 
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone,Debug)]
 pub struct Vec3 {
     pub x: f32,
     pub y: f32,
@@ -181,42 +189,7 @@ impl Vec3 {
         let new_y = ((rel_y * K1) / rel_z) + 0.5;
         Some((new_x, new_y))
     }
-    pub fn approx_eq(&self, other: &Self, eps: f32) -> bool {
-        (self.x - other.x).abs() < eps &&
-        (self.y - other.y).abs() < eps &&
-        (self.z - other.z).abs() < eps
-    }
-
-
-    pub fn rotate_y(&self, angle: f32) -> Vec3 {
-        let cos = angle.cos();
-        let sin = angle.sin();
-        Vec3 {
-            x: self.x * cos + self.z * sin,
-            y: self.y,
-            z: -self.x * sin + self.z * cos,
-        }
-    }
-
-    pub fn rotate_z(&self, angle: f32) -> Vec3 {
-        let cos = angle.cos();
-        let sin = angle.sin();
-        Vec3 {
-            x: self.x * cos - self.y * sin,
-            y: self.x * sin + self.y * cos,
-            z: self.z,
-        }
-    }
-
-    pub fn rotate_x(&self, angle: f32) -> Vec3 {
-        let cos = angle.cos();
-        let sin = angle.sin();
-        Vec3 {
-            x: self.x,
-            y: self.y * cos - self.z * sin,
-            z: self.y * sin + self.z * cos,
-        }
-    }
+    
     pub fn dot(&self, other: Vec3) -> f32 {
         self.x * other.x + self.y * other.y + self.z * other.z
     }
@@ -230,9 +203,6 @@ impl Vec3 {
 
 #[derive(Clone)]
 pub struct Triangle {
-    //pub v0: Vec3,
-    //pub v1: Vec3,
-    //pub v2: Vec3,
     v0: usize,
     v1: usize,
     v2: usize,
@@ -240,9 +210,7 @@ pub struct Triangle {
 
 impl Triangle {
 
-    // pub fn new(v0: Vec3, v1:  Vec3, v2: Vec3) -> Self {
-    //     Self { v0, v1, v2 }
-    // }
+
     pub fn new(v0: usize , v1: usize , v2: usize) -> Self{
         Self {v0,v1,v2}
     }
@@ -253,22 +221,27 @@ impl Triangle {
 
     pub fn normal(&self,points: &Vec<Vec3>) -> Vec3 {
 
+        let v0 = points[self.v0];
+        let v1 = points[self.v1];
+        let v2 = points[self.v2];
+
         let edge1 = Vec3::new(
-            points[self.v1].x - points[self.v0].x,
-            points[self.v1].y - points[self.v0].y,
-            points[self.v1].z - points[self.v0].z,
+            v1.x - v0.x,
+            v1.y - v0.y,
+            v1.z - v0.z,
         );
         let edge2 = Vec3::new(
-            points[self.v2].x - points[self.v0].x,
-            points[self.v2].y - points[self.v0].y,
-            points[self.v2].z - points[self.v0].z,
+            v2.x - v0.x,
+            v2.y - v0.y,
+            v2.z - v0.z,
         );
 
 
         let nx = edge1.y * edge2.z - edge1.z * edge2.y;
         let ny = edge1.z * edge2.x - edge1.x * edge2.z;
         let nz = edge1.x * edge2.y - edge1.y * edge2.x;
-        let len = (nx * nx + ny * ny + nz * nz).sqrt();
-        Vec3::new(nx / len, ny / len, nz / len)
+
+        let len = (nx * nx + ny * ny + nz * nz).sqrt().recip();
+        Vec3::new(nx * len, ny * len, nz * len)
     }
 }

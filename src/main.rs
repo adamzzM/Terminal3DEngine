@@ -1,3 +1,4 @@
+
 use std::{collections::HashMap, io::{self, Write}, time::Duration}; 
 use std::thread::sleep; 
 use std::fs::File; 
@@ -5,6 +6,8 @@ use std::io::BufRead;
 use std::path::Path; 
 use std::time::Instant; 
 
+use std::thread;
+use std::sync::{Arc, Mutex};
 
 
 mod algebra;
@@ -12,6 +15,7 @@ mod input;
 mod terminal;
 
 use algebra::{Vec3,Vec4,Mat4,Triangle};
+use winapi::um::winnt::INCREF;
 
 
 
@@ -25,6 +29,7 @@ struct Transform{
     rotation: Vec4,
     scale: Vec3,
     world: Mat4,
+    center: Vec3,
     dirty: bool
 
 }
@@ -48,6 +53,7 @@ impl Transform{
              rotation: rotation, 
              scale: scale, 
              world: world,
+             center: Vec3::new(0.0,0.0,0.0),
              dirty: false 
             }
     }
@@ -76,18 +82,42 @@ impl Transform{
     pub fn set_scale(&mut self,s: &Vec3){
         self.scale = *s;
     }
+    pub fn set_center(&mut self,c: Vec3){
+        self.dirty = true;
+        self.center = c;
+    } 
 
-    pub fn recalucate_world(&mut self){
-        if !(self.dirty){return}
-        let mut new_world = Mat4::new();
-        new_world.scale(&self.scale);
-        new_world.rotation(&self.rotation);
-        new_world.translation(&self.pos);
-        self.world = new_world;
+
+    pub fn recalculate_world(&mut self) {
+        if !self.dirty { return; }
+
+        let mut scale_mat = Mat4::new();
+        scale_mat.scale(&self.scale);
+
+        let mut rot_mat = Mat4::new();
+        rot_mat.rotation(&self.rotation);
+
+        let mut neg_center = Mat4::new();
+        neg_center.translation(&Vec3::new(-self.center.x, -self.center.y, -self.center.z));
+
+        let mut pos_center = Mat4::new();
+        pos_center.translation(&self.center);
+
+        let mut pos_mat = Mat4::new();
+        pos_mat.translation(&self.pos);
+
+        self.world = pos_mat * pos_center * rot_mat * scale_mat * neg_center;
+
+
+
         self.dirty = false;
     }
+
+
+
+    
     pub fn mat4(&mut self) -> Mat4{
-        self.recalucate_world();
+        self.recalculate_world();
         self.world.clone()
     }
 }
@@ -107,11 +137,10 @@ impl ZBuffer {
     }
 
     #[inline(always)]
-    fn test_and_set(&mut self, x: usize, y: usize, z: f32) -> bool {
-        if x >= self.width || y >= (self.depths.len() / self.width) {
+    fn test_and_set_idx(&mut self, idx: usize, z: f32) -> bool {
+        if idx >= self.depths.len() {
             return false;
         }
-        let idx = y * self.width + x;
         if z < self.depths[idx] {
             self.depths[idx] = z;
             true
@@ -234,33 +263,21 @@ impl Mesh {
         self.map.clear();
         Ok(())
     }
+    pub fn compute_center(&self) -> Vec3 {
 
+        let mut c = Vec3::new(0.0, 0.0, 0.0);
 
+        for point in &self.points{
+            c.x += point.x;
+            c.y += point.y;
+            c.z += point.z;
+        } 
+        let n = (self.points.len()) as f32;
+        Vec3::new(c.x / n, c.y / n, c.z / n)
 
-    fn get_center(&self) -> Vec3 {
-        let mut indices = self.triangles[0].return_indices(); 
-
-        let mut min = self.points[indices.0];
-        let mut max = self.points[indices.0];
-
-        for tri in &self.triangles {
-            indices = tri.return_indices();
-            for v in &[indices.0,indices.1,indices.2] {
-                min.x = min.x.min(self.points[*v].x);
-                min.y = min.y.min(self.points[*v].y);
-                min.z = min.y.min(self.points[*v].z);
-
-                max.x = max.x.max(self.points[*v].x);
-                max.y = max.y.max(self.points[*v].y);
-                max.z = max.z.max(self.points[*v].z);
-            }
-        }
-        Vec3 {
-            x: (min.x + max.x) / 2.0,
-            y: (min.y + max.y) / 2.0,
-            z: (min.z + max.z) / 2.0,
-        }
     }
+
+
 }
 
 
@@ -275,12 +292,16 @@ impl Entity{
         self.mesh.from_obj(path)?;
         Ok(())
     }
+    fn set_center(&mut self){
+        let center = self.mesh.compute_center();
+        self.transform.center = center;
+    }
 }
 
 struct Renderer{
     zbuffer: ZBuffer,
     screen_size: (u16,u16),
-    buffer: Vec<char>,
+    buffer: Vec<u8>,
     camera: Vec3,
     render_buffer: Vec<Vec3>,
     light_dir: Vec3,
@@ -310,9 +331,9 @@ impl Renderer{
         let term = terminal::get_terminal_size();
         let mut light_dir = Vec3::new(0.5,-0.5,-1.0);
 
-        let mut buffer: Vec<char> = Vec::new();
+        let mut buffer: Vec<u8> = Vec::new();
 
-        buffer = vec![' '; term.0 as usize * term.1 as usize];
+        buffer = vec![b' '; term.0 as usize * term.1 as usize];
 
         light_dir.normalize();
         Renderer { 
@@ -336,25 +357,40 @@ impl Renderer{
 
 
 
+        let start = Instant::now();
+
         let term = terminal::get_terminal_size();
         if term != self.screen_size{
             self.zbuffer.resize(term);
-            self.buffer = vec![' '; term.0 as usize * term.1 as usize];
+            self.buffer = vec![b' '; term.0 as usize * term.1 as usize];
             self.screen_size = term;
         }
+
+        // log_to_file(&format!("time taken to get terminal info: {:?}",start.elapsed()));
+        // log_to_file(&format!("terminal size: {:?}",term));
+        // log_to_file(&format!("buffer size: {:?}",self.buffer.len()));
         
 
         
+
+        let start = Instant::now();
 
         for entity in entities{
             self.draw_entity(entity);
         } 
 
+        log_to_file(&format!("time taken to do mathemtaical thingy on entity: {:?}",start.elapsed()));
+
+
+         let start = Instant::now();
 
         self.render_buffer();
 
-        self.buffer.fill(' ');
+        log_to_file(&format!("time taken to render buffer: {:?}",start.elapsed()));
+
+        self.buffer.fill(b' ');
         self.zbuffer.depths.fill(f32::INFINITY);
+
      
        let frame_elapsed = frame_start.elapsed();
             if frame_elapsed < FRAME_TIME {
@@ -373,48 +409,91 @@ impl Renderer{
         }
     }
 
-    fn fill_triangle(&mut self,tri: &Triangle,ch: char){
 
-        let (t0,t1,t2) = tri.return_indices();
+    fn fill_triangle(&mut self, tri: &Triangle, ch: char) {
+        let (t0, t1, t2) = tri.return_indices();
 
-        let r0 = self.render_buffer[t0].resolve(&self.camera);
-        let r1= self.render_buffer[t1].resolve(&self.camera);
-        let r2 = self.render_buffer[t2].resolve(&self.camera);
+        let (r0, r1, r2) = match (
+            self.render_buffer[t0].resolve(&self.camera),
+            self.render_buffer[t1].resolve(&self.camera),
+            self.render_buffer[t2].resolve(&self.camera),
+        ) {
+            (Some(a), Some(b), Some(c)) => (a, b, c),
+            _ => return,
+        };
 
-        if r0.is_none() || r1.is_none() || r2.is_none() {
-            return;
-        }
+        let (nx0, ny0) = r0;
+        let (nx1, ny1) = r1;
+        let (nx2, ny2) = r2;
 
-        let (nx0, ny0) = r0.unwrap();
-        let (nx1, ny1) = r1.unwrap();
-        let (nx2, ny2) = r2.unwrap();
+        if nx0 < 0.0 && nx1 < 0.0 && nx2 < 0.0 { return; }
+        if nx0 > 1.0 && nx1 > 1.0 && nx2 > 1.0 { return; }
+        if ny0 < 0.0 && ny1 < 0.0 && ny2 < 0.0 { return; }
+        if ny0 > 1.0 && ny1 > 1.0 && ny2 > 1.0 { return; }
 
-        let x0 = (self.screen_size.0 as f32 * nx0).round() as i32;
-        let y0 = (self.screen_size.1 as f32 * ny0).round() as i32;
-        let x1 = (self.screen_size.0 as f32 * nx1).round() as i32;
-        let y1 = (self.screen_size.1 as f32 * ny1).round() as i32;
-        let x2 = (self.screen_size.0 as f32 * nx2).round() as i32;
-        let y2 = (self.screen_size.1 as f32 * ny2).round() as i32;
+        let sw = self.screen_size.0 as f32;
+        let sh = self.screen_size.1 as f32;
+
+        let x0 = (sw * nx0).round() as i32;
+        let y0 = (sh * ny0).round() as i32;
+        let x1 = (sw * nx1).round() as i32;
+        let y1 = (sh * ny1).round() as i32;
+        let x2 = (sw * nx2).round() as i32;
+        let y2 = (sh * ny2).round() as i32;
+
+        let denom = ((y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2)) as f32;
+        if denom.abs() < 0.001 { return; }
+        let inv_denom = 1.0 / denom;
 
         let min_x = x0.min(x1).min(x2).max(0);
         let max_x = x0.max(x1).max(x2).min(self.screen_size.0 as i32 - 1);
         let min_y = y0.min(y1).min(y2).max(0);
         let max_y = y0.max(y1).max(y2).min(self.screen_size.1 as i32 - 1);
 
-        for py in min_y..=max_y {
-            for px in min_x..=max_x {
-                let (w0, w1, w2) = self.barycentric(px, py, x0, y0, x1, y1, x2, y2);
-                
-                if w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0 {
-                    let z = w0 * self.render_buffer[t0].z + w1 * self.render_buffer[t1].z + w2 * self.render_buffer[t2].z; // interpolated depth
-                    
-                    if self.zbuffer.test_and_set(px as usize, py as usize, z) {
-                        draw_pixel_to_buffer(px as u16, py as u16, ch,&mut self.buffer,self.screen_size);
-                    }
-                }
-            }
-        }
+        if min_x > max_x || min_y > max_y { return; }
 
+        let z0 = self.render_buffer[t0].z;
+        let z1 = self.render_buffer[t1].z;
+        let z2 = self.render_buffer[t2].z;
+
+        let w0_x_step = (y1 - y2) as f32 * inv_denom;
+        let w1_x_step = (y2 - y0) as f32 * inv_denom;
+
+        let w0_y_step = (x2 - x1) as f32 * inv_denom;
+        let w1_y_step = (x0 - x2) as f32 * inv_denom;
+
+        let w0_seed = ((y1 - y2) * (min_x - x2) + (x2 - x1) * (min_y - y2)) as f32 * inv_denom;
+        let w1_seed = ((y2 - y0) * (min_x - x2) + (x0 - x2) * (min_y - y2)) as f32 * inv_denom;
+
+        let mut w0_row = w0_seed;
+        let mut w1_row = w1_seed;
+
+        let width = self.screen_size.0 as usize;
+
+        for py in min_y..=max_y {
+            let mut w0 = w0_row;
+            let mut w1 = w1_row;
+            let mut inside = false;
+            let row_base = py as usize * width;
+
+            for px in min_x..=max_x {
+                let w2 = 1.0 - w0 - w1;
+                if w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0 {
+                    inside = true;
+                    let z = w0 * z0 + w1 * z1 + w2 * z2;
+                    if self.zbuffer.test_and_set_idx(row_base + px as usize, z) {
+                        draw_pixel_to_buffer(px as u16, py as u16, ch, &mut self.buffer, self.screen_size);
+                    }
+                } else if inside {
+                    break;
+                }
+                w0 += w0_x_step;
+                w1 += w1_x_step;
+            }
+
+            w0_row += w0_y_step;
+            w1_row += w1_y_step;
+        }
     }
 
 
@@ -437,51 +516,65 @@ impl Renderer{
     }
 
 
-    fn barycentric(&self,px: i32, py: i32, x0: i32, y0: i32, x1: i32, y1: i32, x2: i32, y2: i32) -> (f32, f32, f32) {
-        let denom = ((y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2)) as f32;
-        if denom.abs() < 0.001 {
-            return (-1.0, -1.0, -1.0);
-        }
-        let w0 = ((y1 - y2) * (px - x2) + (x2 - x1) * (py - y2)) as f32 / denom;
-        let w1 = ((y2 - y0) * (px - x2) + (x0 - x2) * (py - y2)) as f32 / denom;
-        let w2 = 1.0 - w0 - w1;
-        (w0, w1, w2)
-    }
-
 
     fn render_buffer(&self) {
-        let mut stdout = io::stdout();
-        for y in 0..self.screen_size.1 {
-            write!(stdout, "\x1B[{};1H", y + 1).unwrap(); // move cursor to beginning of line 
-            for x in 0..self.screen_size.0 {
-                let idx = (y as usize) * (self.screen_size.0 as usize) + (x as usize);
-                let ch = self.buffer[idx];
-                write!(stdout, "{}", ch).unwrap();
-            }
+        let w = self.screen_size.0 as usize;
+        let h = self.screen_size.1 as usize;
+        let mut out: Vec<u8> = Vec::with_capacity(w * h + h + 8);
+        
+        out.extend_from_slice(b"\x1B[H");
+        
+        for y in 0..h {
+            let row_start = y * w;
+            out.extend_from_slice(&self.buffer[row_start..row_start + w]);
+            out.push(b'\n');
         }
-        stdout.flush().unwrap();
+        
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+        handle.write_all(&out).unwrap();
+        handle.flush().unwrap();
     }
 
     fn draw_entity(&mut self,entity: &mut Entity){
+        let start= Instant::now();
         self.apply_transform_to_buffer(entity); // local buffer of points
+        let now = start.elapsed();
+        log_to_file(&format!("time taken to apply transform to buffer is : {:?}",now));
+
+
+        let mut normal_total = Duration::ZERO;
+        let mut cull_total = Duration::ZERO;
+        let mut lighting_total = Duration::ZERO;
+        let mut raster_total = Duration::ZERO;
 
 
         for tri in &entity.mesh.triangles {
+
+            let start = Instant::now();
             let normal = tri.normal(&self.render_buffer);
-            
+            normal_total += start.elapsed();
+
+            let start = Instant::now();
             let view_dir = Vec3::new(0.0, 0.0, -1.0);
             let dot = normal.dot(view_dir);
-            if dot <= 0.0 {
-                continue;
-            }
-            // only draw if visible to camera TODO
-            
+            if dot <= 0.0 { continue; }
+            cull_total += start.elapsed();
+
+            let start = Instant::now();
             let intensity = self.calculate_lighting(normal, self.light_dir);
             let ch = self.intensity_to_char(intensity);
-            
+            lighting_total += start.elapsed();
+
+            let start = Instant::now();
             self.fill_triangle(tri, ch);
-        }
-        
+            raster_total += start.elapsed();
+    }
+
+    log_to_file(&format!(
+        "Normals: {:?}, Cull: {:?}, Lighting: {:?}, Raster: {:?}",
+        normal_total, cull_total, lighting_total, raster_total
+    ));
     }
 }
 
@@ -499,17 +592,19 @@ fn main() {
     let mut cube = Entity::new();
     let _ = cube.load_obj("obj/skull.obj");
 
-    cube.transform.scale_by(Vec3::new(0.01,0.01,0.01));
-    cube.transform.translate(&Vec3 { x: 0.0, y: 0.0 , z: 45.0 });
+    cube.set_center();
+
+    // cube.transform.scale_by(Vec3::new( 0.5,0.5,0.5));
+    cube.transform.translate(&Vec3 { x: -0.0, y: 10.0 ,z:45.0 });
     
 
     entities.push(cube);
 
 
     loop {
-        renderer.render(&mut entities);
-        for entity in &mut entities{
-            entity.transform.rotate(&Vec4::new(0.04, 0.04, 0.0, 1.0));
+            renderer.render(&mut entities);
+            for entity in &mut entities{
+                entity.transform.rotate(&Vec4::new(0.03, 0.0, 0.03, 1.0));
         }
     }
 
@@ -519,9 +614,21 @@ fn main() {
 }
 
 
-fn draw_pixel_to_buffer(x: u16, y: u16, ch: char, buffer: &mut Vec<char>, screen_size: (u16, u16)) {
+fn draw_pixel_to_buffer(x: u16, y: u16, ch: char, buffer: &mut Vec<u8>, screen_size: (u16, u16)) {
     let idx = (y as usize) * (screen_size.0 as usize) + (x as usize);
     if idx < buffer.len() {
-        buffer[idx] = ch;
+        buffer[idx] = ch as u8;
     }
+}
+
+use std::fs::OpenOptions;
+
+fn log_to_file(msg: &str) {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("timing.log")
+        .unwrap();
+
+    writeln!(file, "{msg}").unwrap();
 }
