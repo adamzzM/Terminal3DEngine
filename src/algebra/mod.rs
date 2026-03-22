@@ -175,16 +175,18 @@ impl Vec3 {
     // tbr
     pub fn resolve(&self,camera: &Vec3) -> Option<(f32, f32)> {
 
+        const MIN: f32 = 0.1;
+        const K1: f32 = 1.2;
+
         let rel_x = self.x - camera.x;
         let rel_y= self.y - camera.y;
         let rel_z = self.z - camera.z;
 
 
-        const MIN: f32 = 0.1;
+        
         if rel_z < MIN {
             return None;
         }
-        const K1: f32 = 1.2;
         let new_x = ((rel_x * K1) / rel_z) + 0.5;
         let new_y = ((rel_y * K1) / rel_z) + 0.5;
         Some((new_x, new_y))
@@ -206,16 +208,20 @@ pub struct Triangle {
     v0: usize,
     v1: usize,
     v2: usize,
+    c: usize,
 }
 
 impl Triangle {
 
 
-    pub fn new(v0: usize , v1: usize , v2: usize) -> Self{
-        Self {v0,v1,v2}
+    pub fn new(v0: usize , v1: usize , v2: usize,c: usize) -> Self{
+        Self {v0,v1,v2,c}
     }
     pub fn return_indices(&self) -> (usize,usize,usize){
         (self.v0,self.v1,self.v2)
+    }
+    pub fn return_mat_idx(&self) -> usize{
+        self.c
     }
 
 
