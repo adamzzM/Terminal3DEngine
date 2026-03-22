@@ -34,3 +34,7 @@ clone the project `git clone https://github.com/adamzzM/Terminal3DEngine`
 *important* before running you need to have an object file and have it linked in the main.rs currenly the preview is done with skull.obj (i dont remember where I got it from)
 
 and then run `cargo run` inside of the folder
+
+## LICENSE 
+
+its under the gnu license which basically means do whatever but it has to be open source too If you want to use it in a closed source application just dm me and I'll let you I just picked this because I genuinely have no idea 
