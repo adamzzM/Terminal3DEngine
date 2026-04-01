@@ -21,9 +21,9 @@ Also I was forced to learn some optimization and what my code was actually doing
 This is probably one of the first times actually switching from a quadratic time complexity solution to instantenous was actually noticable 
 
 
-there lies a problem rn when it comes to implementing multi threading, I have two main ways of doing it rn 
-either I can split the screen into n number of screens then compute each segement seperatly and have seperate z-buffers or I could split the array of triangles and compute them at the same time and then I'd have to atomize z-buffer to avoid problems with that 
+Multi threading was probably the hardest thing to implement , I seperated the screen into N tiles (25 rn) then I get total number of threads calculate optimal number of triangles per thread , give em each and let em calculate with their own zbuffer 
 
+the reason I seperate them into tiles is because you have to keep something called the z-buffer which is basically a record of the closest pixel to the screen rn. (It helps to determine which things are hidden behind what things)
 
 ## Running it
 
