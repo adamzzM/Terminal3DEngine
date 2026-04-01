@@ -19,16 +19,14 @@ fn main() {
     let mut entities: Vec<Entity> = Vec::new();
 
     let mut cube = Entity::new();
-    let _ = cube.load_obj("obj/cube.obj");
+    let _ = cube.load_obj("obj/skull.obj");
 
     // cube.transform.scale_by(Vec3 { x: 0.5, y: 0.5,z: 0.5 });
-    cube.transform.translate(&Vec3 { x: 0.0, y: 0.0 ,z: 0.0 });
+    cube.transform.translate(&Vec3 { x: 0.0, y: -10.0 ,z: 30.0 });
     cube.transform.rotate(&Vec4::new(1.0,0.0,0.0,0.0));
-    cube.set_color(22, 100, 50);
+    cube.set_color(2, 100, 50);
 
     entities.push(cube);
-
-    
 
     loop {
             renderer.render(&mut entities);

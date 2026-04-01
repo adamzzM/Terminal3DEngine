@@ -1,20 +1,17 @@
-
 use crate::{
     algebra::{
         Triangle, Vec3
     },
-    entity::{
-        self, Entity, MatColor
-    },
+    entity::Entity,
     terminal::get_terminal_size,
-
 };
 
 use std::{
-    time::{Duration, Instant},
-    thread::sleep,
-    io::{self,Write}
+    io::{self,Write}, num, thread::sleep, time::{Duration, Instant}
 };
+
+
+static HIGHDEF: bool = false;
 
 struct ZBuffer {
     depths : Vec<f32>,
@@ -50,7 +47,6 @@ impl ZBuffer {
         self.depths.clear();
         self.depths.resize(new_width * new_height, f32::INFINITY);
     }
-
 }
 
 
@@ -91,25 +87,22 @@ fn push_color(out: &mut Vec<u8>, r: u8, g: u8, b: u8) {
 }
 
 
-
-pub struct Renderer{
+pub struct Renderer {
     zbuffer: ZBuffer,
-    screen_size: (u16,u16),
+    screen_size: (u16, u16),
     buffer: Vec<u32>,
     camera: Vec3,
     render_buffer: Vec<Vec3>,
     light_dir: Vec3,
+    prev_buffer: Vec<u32>,
 }
 
-impl Renderer{
+impl Renderer {
 
-    // TODO REPLACE ALL .resolve WITH THIS
-    fn resolve_point(camera: &Vec3,point: &Vec3) -> Option<(f32,f32)>{
-        
-        let rel_x = point.x - camera.x;
-        let rel_y= point.y - camera.y;
-        let rel_z = point.z - camera.z;
-
+    fn resolve_point(&self, point: &Vec3) -> Option<(f32, f32)> {
+        let rel_x = point.x - self.camera.x;
+        let rel_y = point.y - self.camera.y;
+        let rel_z = point.z - self.camera.z;
 
         const MIN: f32 = 0.1;
         if rel_z < MIN {
@@ -121,193 +114,104 @@ impl Renderer{
         Some((new_x, new_y))
     }
 
-    pub fn new() -> Self{
+    pub fn new() -> Self {
+        print!("\x1B[2J\x1B[H");
+
         let term = get_terminal_size();
-        let mut light_dir = Vec3::new(0.5,-0.5,-1.0);
-
-        let mut buffer: Vec<u32> = Vec::new();
-
-        buffer = vec![b' ' as u32; term.0 as usize * term.1 as usize];
-
+        let mut light_dir = Vec3::new(0.5, -0.5, -1.0);
         light_dir.normalize();
-        Renderer { 
+
+        let buf_size = term.0 as usize * term.1 as usize;
+
+        Renderer {
             zbuffer: ZBuffer::new(&term),
             screen_size: term,
-            buffer: buffer,
-            camera: (Vec3::new(0.0,0.0,0.0)),
+            buffer: vec![b' ' as u32; buf_size],
+            camera: Vec3::new(0.0, 0.0, 0.0),
             render_buffer: Vec::new(),
             light_dir,
+            prev_buffer: vec![b' ' as u32; buf_size],
         }
     }
 
-    pub fn render(&mut self,entities: &mut Vec<Entity>){
-
+    pub fn render(&mut self, entities: &mut Vec<Entity>) {
         const TARGET_FPS: u64 = 60;
         const FRAME_TIME: Duration = Duration::from_millis(1000 / TARGET_FPS);
 
-
         let frame_start = Instant::now();
 
-
         let term = get_terminal_size();
-        if term != self.screen_size{
+        if term != self.screen_size {
+            print!("\x1B[2J\x1B[H");
             self.zbuffer.resize(term);
-            self.buffer = vec![b' ' as u32; term.0 as usize * term.1 as usize];
+            let buf_size = term.0 as usize * term.1 as usize;
+            self.buffer = vec![b' ' as u32; buf_size];
+            self.prev_buffer = vec![b' ' as u32; buf_size];
             self.screen_size = term;
         }
 
-        for entity in entities{
+        let start = Instant::now();
+        for entity in entities {
             self.draw_entity(entity);
-        } 
+        }
 
+        let duration = start.elapsed();
+
+        log_to_file(&format!("elapsed time to draw entity {:?}",duration));
+
+        let start = Instant::now();
 
         self.render_buffer();
+        self.swap_buffers();
 
+        log_to_file(&format!("elapsed time to render buffer entity {:?}",start.elapsed()));
 
         self.buffer.fill(b' ' as u32);
         self.zbuffer.depths.fill(f32::INFINITY);
 
-     
-       let frame_elapsed = frame_start.elapsed();
-            if frame_elapsed < FRAME_TIME {
-                sleep(FRAME_TIME - frame_elapsed);
-       }
-
+        let frame_elapsed = frame_start.elapsed();
+        if frame_elapsed < FRAME_TIME {
+            sleep(FRAME_TIME - frame_elapsed);
+        }
     }
 
-    fn apply_transform_to_buffer(&mut self,entity: &mut Entity){
+    fn apply_transform_to_buffer(&mut self, entity: &mut Entity) {
         let mat4 = entity.transform.mat4();
-        
-        self.render_buffer.resize(entity.mesh.points.len(),Vec3::new(0.0,0.0,0.0));
 
-        for (itera,item) in entity.mesh.points.iter().enumerate(){
-            self.render_buffer[itera] = &mat4 * *item; 
+        self.render_buffer.resize(entity.mesh.points.len(), Vec3::new(0.0, 0.0, 0.0));
+
+        for (itera, item) in entity.mesh.points.iter().enumerate() {
+            self.render_buffer[itera] = &mat4 * *item;
         }
     }
-
-
-    fn fill_triangle(&mut self, tri: &Triangle, ch: u8,r: u8,g: u8,b: u8) {
-        let (t0, t1, t2) = tri.return_indices();
-
-        let (r0, r1, r2) = match (
-            self.render_buffer[t0].resolve(&self.camera),
-            self.render_buffer[t1].resolve(&self.camera),
-            self.render_buffer[t2].resolve(&self.camera),
-        ) {
-            (Some(a), Some(b), Some(c)) => (a, b, c),
-            _ => return,
-        };
-
-        let (nx0, ny0) = r0;
-        let (nx1, ny1) = r1;
-        let (nx2, ny2) = r2;
-
-        if nx0 < 0.0 && nx1 < 0.0 && nx2 < 0.0 { return; }
-        if nx0 > 1.0 && nx1 > 1.0 && nx2 > 1.0 { return; }
-        if ny0 < 0.0 && ny1 < 0.0 && ny2 < 0.0 { return; }
-        if ny0 > 1.0 && ny1 > 1.0 && ny2 > 1.0 { return; }
-
-        let sw = self.screen_size.0 as f32;
-        let sh = self.screen_size.1 as f32;
-
-        let x0 = (sw * nx0).round() as i32;
-        let y0 = (sh * ny0).round() as i32;
-        let x1 = (sw * nx1).round() as i32;
-        let y1 = (sh * ny1).round() as i32;
-        let x2 = (sw * nx2).round() as i32;
-        let y2 = (sh * ny2).round() as i32;
-
-        let denom = ((y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2)) as f32;
-        if denom.abs() < 0.001 { return; }
-        let inv_denom = 1.0 / denom;
-
-        let min_x = x0.min(x1).min(x2).max(0);
-        let max_x = x0.max(x1).max(x2).min(self.screen_size.0 as i32 - 1);
-        let min_y = y0.min(y1).min(y2).max(0);
-        let max_y = y0.max(y1).max(y2).min(self.screen_size.1 as i32 - 1);
-
-        if min_x > max_x || min_y > max_y { return; }
-
-        let z0 = self.render_buffer[t0].z;
-        let z1 = self.render_buffer[t1].z;
-        let z2 = self.render_buffer[t2].z;
-
-        let w0_x_step = (y1 - y2) as f32 * inv_denom;
-        let w1_x_step = (y2 - y0) as f32 * inv_denom;
-
-        let w0_y_step = (x2 - x1) as f32 * inv_denom;
-        let w1_y_step = (x0 - x2) as f32 * inv_denom;
-
-        let w0_seed = ((y1 - y2) * (min_x - x2) + (x2 - x1) * (min_y - y2)) as f32 * inv_denom;
-        let w1_seed = ((y2 - y0) * (min_x - x2) + (x0 - x2) * (min_y - y2)) as f32 * inv_denom;
-
-        let mut w0_row = w0_seed;
-        let mut w1_row = w1_seed;
-
-        let width = self.screen_size.0 as usize;
-
-        for py in min_y..=max_y {
-            let mut w0 = w0_row;
-            let mut w1 = w1_row;
-            let mut inside = false;
-            let row_base = py as usize * width;
-
-            for px in min_x..=max_x {
-                let w2 = 1.0 - w0 - w1;
-                if w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0 {
-                    inside = true;
-                    let z = w0 * z0 + w1 * z1 + w2 * z2;
-                    if self.zbuffer.test_and_set_idx(row_base + px as usize, z) {
-                        self.buffer[(py as usize) * (self.screen_size.0 as usize) + (px as usize)] = make_cell(ch, r, g, b);
-                    }
-                } else if inside {
-                    break;
-                }
-                w0 += w0_x_step;
-                w1 += w1_x_step;
-            }
-
-            w0_row += w0_y_step;
-            w1_row += w1_y_step;
-        }
-    }
-
-    fn intensity_to_char(&self,intensity: f32) -> u8{
-
-        // '█'
-        let chars = [
-        b' ', b'`', b'.', b',', b'\'', b':', b';', b'-' , b'^', 
-        b'~', b'=', b'+', b'*', b'!' ,b'o', b'O', b'#', b'%', b'@', 
-        ];
-
-        let gamma = intensity.powf(0.6);
-        let idx = (gamma * (chars.len() - 1) as f32) as usize;
-        chars[idx.min(chars.len() - 1)]
-    }
-
-    fn calculate_lighting(&self,normal: Vec3, light_dir: Vec3) -> f32 {
-        let light_fall_off = 0.3;
-        let dot = normal.dot(light_dir);
-        let distance_fade = (1.0 / (1.0 + normal.z * light_fall_off)).clamp(0.1, 1.0);
-        (dot * distance_fade).max(0.0)
-    }
-
-
 
     fn render_buffer(&self) {
         let w = self.screen_size.0 as usize;
         let h = self.screen_size.1 as usize;
-        let mut out: Vec<u8> = Vec::with_capacity(w * h * 21);
+        let mut out: Vec<u8> = Vec::with_capacity(w * h * 8);
 
-        out.extend_from_slice(b"\x1B[H");
-
-        let mut last_rgb: u32 = u32::MAX; // impossible value forces first emit
+        let mut last_rgb: u32 = u32::MAX;
+        let mut cursor_row: usize = usize::MAX;
+        let mut cursor_col: usize = usize::MAX;
 
         for y in 0..h {
             for x in 0..w {
-                let cell = self.buffer[y * w + x];
-                let rgb = cell >> 8;  // top 3 bytes are r,g,b
+                let idx = y * w + x;
+                let cell = self.buffer[idx];
 
+                if cell == self.prev_buffer[idx] {
+                    cursor_col = usize::MAX;
+                    continue;
+                }
+
+                if cursor_row != y || cursor_col != x {
+                    write!(out, "\x1B[{};{}H", y + 1, x + 1).unwrap();
+                    cursor_row = y;
+                    cursor_col = x;
+                    last_rgb = u32::MAX;
+                }
+
+                let rgb = cell >> 8;
                 if rgb != last_rgb {
                     let r = (cell >> 24) as u8;
                     let g = (cell >> 16) as u8;
@@ -316,61 +220,299 @@ impl Renderer{
                     last_rgb = rgb;
                 }
 
-                out.push(cell as u8); // ch is lowest byte
+                out.push(cell as u8);
+                cursor_col += 1;
             }
-            out.push(b'\n');
+            cursor_row = y;
         }
 
-        out.extend_from_slice(b"\x1B[0m");
-
-        let stdout = io::stdout();
-        let mut handle = stdout.lock();
-        handle.write_all(&out).unwrap();
-        handle.flush().unwrap();
+        if !out.is_empty() {
+            out.extend_from_slice(b"\x1B[0m");
+            let stdout = io::stdout();
+            let mut handle = stdout.lock();
+            handle.write_all(&out).unwrap();
+            handle.flush().unwrap();
+        }
     }
 
-    fn draw_entity(&mut self,entity: &mut Entity){
+    fn swap_buffers(&mut self) {
+        self.prev_buffer.copy_from_slice(&self.buffer);
+    }
 
-        self.apply_transform_to_buffer(entity); // local buffer of points
+    fn draw_entity(&mut self, entity: &mut Entity) {
+
+        fn fill_triangle(
+            tri: &Triangle,
+            ch: u8, r: u8, g: u8, b: u8,
+            screen_size: (u16, u16),
+            render_buffer: &[Vec3],   
+            camera: Vec3,
+            zbuffer: &mut ZBuffer,   
+        ) -> Option<Vec<(usize, usize, u32)>> {
+
+            let mut buffer: Vec<(usize, usize, u32)> = Vec::new();
+
+            let (t0, t1, t2) = tri.return_indices();
+
+            let (r0, r1, r2) = match (
+                render_buffer[t0].resolve(&camera),
+                render_buffer[t1].resolve(&camera),
+                render_buffer[t2].resolve(&camera),
+            ) {
+                (Some(a), Some(b), Some(c)) => (a, b, c),
+                _ => return None,
+            };
+
+            let (nx0, ny0) = r0;
+            let (nx1, ny1) = r1;
+            let (nx2, ny2) = r2;
+
+            if nx0 < 0.0 && nx1 < 0.0 && nx2 < 0.0 { return None; }
+            if nx0 > 1.0 && nx1 > 1.0 && nx2 > 1.0 { return None; }
+            if ny0 < 0.0 && ny1 < 0.0 && ny2 < 0.0 { return None; }
+            if ny0 > 1.0 && ny1 > 1.0 && ny2 > 1.0 { return None; }
+
+            let sw = screen_size.0 as f32;
+            let sh = screen_size.1 as f32;
+
+            let x0 = (sw * nx0).round() as i32;
+            let y0 = (sh * ny0).round() as i32;
+            let x1 = (sw * nx1).round() as i32;
+            let y1 = (sh * ny1).round() as i32;
+            let x2 = (sw * nx2).round() as i32;
+            let y2 = (sh * ny2).round() as i32;
+
+            let denom = ((y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2)) as f32;
+            if denom.abs() < 0.001 { return None; }
+            let inv_denom = 1.0 / denom;
+
+            let min_x = x0.min(x1).min(x2).max(0);
+            let max_x = x0.max(x1).max(x2).min(screen_size.0 as i32 - 1);
+            let min_y = y0.min(y1).min(y2).max(0);
+            let max_y = y0.max(y1).max(y2).min(screen_size.1 as i32 - 1);
+
+            if min_x > max_x || min_y > max_y { return None; }
+
+            let z0 = render_buffer[t0].z;
+            let z1 = render_buffer[t1].z;
+            let z2 = render_buffer[t2].z;
+
+            let w0_x_step = (y1 - y2) as f32 * inv_denom;
+            let w1_x_step = (y2 - y0) as f32 * inv_denom;
+
+            let w0_y_step = (x2 - x1) as f32 * inv_denom;
+            let w1_y_step = (x0 - x2) as f32 * inv_denom;
+
+            let w0_seed = ((y1 - y2) * (min_x - x2) + (x2 - x1) * (min_y - y2)) as f32 * inv_denom;
+            let w1_seed = ((y2 - y0) * (min_x - x2) + (x0 - x2) * (min_y - y2)) as f32 * inv_denom;
+
+            let mut w0_row = w0_seed;
+            let mut w1_row = w1_seed;
+
+            let width = screen_size.0 as usize;
+
+            for py in min_y..=max_y {
+                let mut w0 = w0_row;
+                let mut w1 = w1_row;
+                let mut inside = false;
+                let row_base = py as usize * width;
+
+                for px in min_x..=max_x {
+                    let w2 = 1.0 - w0 - w1;
+                    if w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0 {
+                        inside = true;
+                        let z = w0 * z0 + w1 * z1 + w2 * z2;
+                        if zbuffer.test_and_set_idx(row_base + px as usize, z) {
+                            buffer.push((py as usize, px as usize, make_cell(ch, r, g, b)));
+                        }
+                    } else if inside {
+                        break;
+                    }
+                    w0 += w0_x_step;
+                    w1 += w1_x_step;
+                }
+
+                w0_row += w0_y_step;
+                w1_row += w1_y_step;
+            }
+            Some(buffer)
+        }
+
+        fn intensity_to_char(intensity: f32) -> u8 {
+            const LOWCHARS: &[u8] = &[
+                b' ', b'`', b'.', b',', b'\'', b':', b';', b'-', b'^',
+                b'~', b'=', b'+', b'*', b'!', b'o', b'O', b'#', b'%', b'@',
+            ];
+            const HIGHCHARS: &[u8] = &[
+                b' ', b'.', b'\'', b'`', b'^', b'"', b',', b':', b';', b'I', b'l',
+                b'!', b'i', b'>', b'<', b'~', b'+', b'_', b'-', b'?', b']', b'[',
+                b'}', b'{', b'1', b')', b'(', b'|', b'\\', b'/', b't', b'f', b'j',
+                b'r', b'x', b'n', b'u', b'v', b'c', b'z', b'X', b'Y', b'U', b'J',
+                b'C', b'L', b'Q', b'0', b'O', b'Z', b'm', b'w', b'q', b'p', b'd',
+                b'b', b'k', b'h', b'a', b'o', b'*', b'#', b'M', b'W', b'&', b'8',
+                b'%', b'B', b'@', b'$',
+            ];
+            let chars = if HIGHDEF {HIGHCHARS} else {LOWCHARS};
+            let gamma = intensity.powf(0.6);
+            let idx = (gamma * (chars.len() - 1) as f32) as usize;
+            chars[idx.min(chars.len() - 1)]
+        }
+
+        fn calculate_lighting(normal: Vec3, light_dir: Vec3) -> f32 {
+            let light_fall_off = 0.3;
+            let dot = normal.dot(light_dir);
+            let distance_fade = (1.0 / (1.0 + normal.z * light_fall_off)).clamp(0.1, 1.0);
+            (dot * distance_fade).max(0.0)
+        }
+
+        let number_in_a_row: usize = 5;
+        let number_of_tiles = number_in_a_row * number_in_a_row;
+
+        self.apply_transform_to_buffer(entity);
 
         let ent_color = entity.get_color();
 
-        let is_color = ent_color.is_none();
+        let use_material = ent_color.is_none();
 
-        let mut r: u8 = 0;
-        let mut g: u8 = 0;
-        let mut b: u8 = 0;
-
-
-
-        if !is_color{
+        let (solid_r, solid_g, solid_b): (u8, u8, u8) = if !use_material {
             let c = ent_color.unwrap();
-            r = c.r;
-            g = c.g;
-            b = c.b;
-        }
+            (c.r, c.g, c.b)
+        } else {
+            (255, 255, 255)
+        };
+
+        let mut which_tile: Vec<Vec<Triangle>> = vec![vec![]; number_of_tiles];
 
         for tri in &entity.mesh.triangles {
+            let (t0, t1, t2) = tri.return_indices();
+            let (r0, r1, r2) = match (
+                self.resolve_point(&self.render_buffer[t0]),
+                self.resolve_point(&self.render_buffer[t1]),
+                self.resolve_point(&self.render_buffer[t2]),
+            ) {
+                (Some(a), Some(b), Some(c)) => (a, b, c),
+                _ => continue,
+            };
 
-            let normal = tri.normal(&self.render_buffer);
+            let x_min = r0.0.min(r1.0).min(r2.0);
+            let x_max = r0.0.max(r1.0).max(r2.0);
+            let y_min = r0.1.min(r1.1).min(r2.1);
+            let y_max = r0.1.max(r1.1).max(r2.1);
 
-            let view_dir = Vec3::new(0.0, 0.0, -1.0);
-            let dot = normal.dot(view_dir);
-            if dot <= 0.0 { continue; }
+            let col_min = ((x_min * number_in_a_row as f32) as usize).min(number_in_a_row - 1);
+            let col_max = ((x_max * number_in_a_row as f32) as usize).min(number_in_a_row - 1);
+            let row_min = ((y_min * number_in_a_row as f32) as usize).min(number_in_a_row - 1);
+            let row_max = ((y_max * number_in_a_row as f32) as usize).min(number_in_a_row - 1);
 
-            let intensity = self.calculate_lighting(normal, self.light_dir);
-            let ch = self.intensity_to_char(intensity);
-
-            if is_color{
-                let mat = &entity.mesh.material_color[tri.return_mat_idx()];
-                r = (mat.r as f32 * intensity) as u8;
-                g = (mat.g as f32 * intensity) as u8;
-                b = (mat.b as f32 * intensity) as u8;
+            for row in row_min..=row_max {
+                for col in col_min..=col_max {
+                    which_tile[row * number_in_a_row + col].push(tri.clone());
+                }
             }
+        }
 
-            self.fill_triangle(tri, ch,r,g,b);
+        let def: num::NonZero<usize> = num::NonZero::new(1_usize).unwrap();
+        let num_of_threads = std::thread::available_parallelism().unwrap_or(def).get();
+
+        let thread_optimum = (entity.mesh.triangles.len() / num_of_threads).max(1);
+        let mut tile_assignments: Vec<Vec<&Vec<Triangle>>> = vec![Vec::new(); num_of_threads];
+        let mut current_thread = 0;
+        let mut count = 0;
+
+        for tile in &which_tile {
+            if current_thread + 1 < num_of_threads && count >= thread_optimum {
+                current_thread += 1;
+                count = 0;
+            }
+            tile_assignments[current_thread].push(tile);
+            count += tile.len();
+        }
+
+        let screen_size = self.screen_size;
+        let points: &Vec<Vec3> = &self.render_buffer;
+        let buf_size = screen_size.0 as usize * screen_size.1 as usize;
+
+        let partial_buffers: Vec<Vec<u32>> = std::thread::scope(|s| {
+            let handles: Vec<_> = tile_assignments
+                .into_iter()
+                .map(|given_tiles| {
+                    let camera = self.camera;
+                    let light_dir = self.light_dir;
+                    let material_colors: &[_] = &entity.mesh.material_color;
+
+                    s.spawn(move || {
+                        let mut final_buffer: Vec<u32> = vec![0u32; buf_size];
+
+                        let mut zbuffer = ZBuffer::new(&screen_size);
+
+                        for tile in given_tiles {
+                            zbuffer.depths.fill(f32::INFINITY);
+
+                            for tri in tile {
+                                let normal = tri.normal(points);
+                                let view_dir = Vec3::new(0.0, 0.0, -1.0);
+                                if normal.dot(view_dir) <= 0.0 {
+                                    continue;
+                                }
+
+                                let intensity = calculate_lighting(normal, light_dir);
+                                let ch = intensity_to_char(intensity);
+
+                                let (r, g, b) = if use_material {
+                                    let mat = &material_colors[tri.return_mat_idx()];
+                                    (
+                                        (mat.r as f32 * intensity) as u8,
+                                        (mat.g as f32 * intensity) as u8,
+                                        (mat.b as f32 * intensity) as u8,
+                                    )
+                                } else {
+                                    (
+                                        (solid_r as f32 * intensity) as u8,
+                                        (solid_g as f32 * intensity) as u8,
+                                        (solid_b as f32 * intensity) as u8,
+                                    )
+                                };
+
+                                if let Some(pixels) = fill_triangle(
+                                    tri, ch, r, g, b,
+                                    screen_size, points, camera,
+                                    &mut zbuffer,
+                                ) {
+                                    for (row, col, packed) in pixels {
+                                        let idx = row * screen_size.0 as usize + col;
+                                        if idx < final_buffer.len() {
+                                            final_buffer[idx] = packed;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        final_buffer
+                    })
+                })
+                .collect();
+
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+
+        for partial in partial_buffers {
+            for (i, &val) in partial.iter().enumerate() {
+                if val != 0 {
+                    self.buffer[i] = val;
+                }
+            }
         }
     }
-
 }
 
+use std::fs::OpenOptions;
+
+pub fn log_to_file(message: &str) {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("log.txt")
+        .expect("Failed to open log file");
+
+    writeln!(file, "{}", message).expect("Failed to write to log file");
+}
