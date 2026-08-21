@@ -1,3 +1,7 @@
+*A CPU-based, multithreaded software rasterizer
+written from scratch in Rust.*
+
+
 ### spinning skull
 <p align="center">
 
